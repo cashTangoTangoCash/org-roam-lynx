@@ -1,0 +1,265 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 4</h1>
+<p><strong><a href="20261005_235725_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>That bug happens because <code>curses</code> renders list rows using <code>enumerate(self.connections[:max_items])</code>, while the key handling allows <code>selected_idx</code> to keep incrementing all the way to length of <code>connections</code>. When <code>selected_idx</code> exceeds <code>max_items</code>, the highlight ring moves off-screen while the visible list remains anchored at the top!</p>
+<p>The good news: <strong>you do not need a full pager.</strong> You only need a rolling offset window (typically 3–5 lines of arithmetic) to keep <code>selected_idx</code> pinned inside the visible viewport.</p>
+<hr />
+<h3>How Viewport Scrolling Works</h3>
+<p>Instead of rendering starting always from item <code>0</code>, we maintain a <code>top_idx</code> pointer:</p>
+<pre><code>  [0] Connection A  ◄── top_idx
+  [1] Connection B
+  [2] Connection C  ◄── selected_idx (Highlighted)
+  [3] Connection D
+── Screen Boundary (max_items = 4) ─────────────────
+  [4] Connection E  (Hidden off-screen)
+
+</code></pre>
+<p>When moving down, if <code>selected_idx</code> hits <code>top_idx + max_items</code>, we shift <code>top_idx += 1</code>.</p>
+<p>When moving up, if <code>selected_idx</code> goes below <code>top_idx</code>, we shift <code>top_idx -= 1</code>.</p>
+<hr />
+<h3>Fixed Prototype with Rolling Viewport</h3>
+<p>Here is the updated script with scrolling window logic added. It also adds a scroll indicator <code>(Item X of Y)</code> to the section header.</p>
+<pre><code class="language-python">#!/usr/bin/env python3
+import curses
+import os
+import sqlite3
+import sys
+
+# ----------------------------------------------------------------------
+# Configuration / Hardcoded Defaults
+# ----------------------------------------------------------------------
+DEFAULT_DB = os.path.expanduser(&quot;~/.config/emacs/org-roam.db&quot;)
+START_NODE_TITLE = &quot;Index&quot;
+
+
+class OrgRoamNavigator:
+
+    def __init__(self, db_path, initial_title):
+        self.db_path = db_path
+        self.initial_title = initial_title
+
+        if not os.path.exists(self.db_path):
+            print(f&quot;Error: Database not found at {self.db_path}&quot;)
+            sys.exit(1)
+
+        self.conn = sqlite3.connect(self.db_path)
+        self.cursor = self.conn.cursor()
+
+        # Navigation state
+        self.history = []  # Stack of node tuples: (id, title, file)
+        self.current_node = None  # (id, title, file)
+        self.connections = []  # List of connection dicts
+        self.selected_idx = 0
+        self.top_idx = 0  # Viewport scroll offset
+
+    def find_initial_node(self):
+        &quot;&quot;&quot;Find node matching START_NODE_TITLE or fall back to the first available node.&quot;&quot;&quot;
+        if self.initial_title:
+            sql = &quot;SELECT id, title, file FROM nodes WHERE title LIKE ? LIMIT 1;&quot;
+            self.cursor.execute(sql, (f&quot;%{self.initial_title}%&quot;,))
+            row = self.cursor.fetchone()
+            if row:
+                title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+                return (row[0], title, row[2])
+
+        # Fallback if hardcoded title isn't found
+        self.cursor.execute(&quot;SELECT id, title, file FROM nodes LIMIT 1;&quot;)
+        row = self.cursor.fetchone()
+        if not row:
+            print(&quot;Error: No nodes found in database.&quot;)
+            sys.exit(1)
+
+        title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+        return (row[0], title, row[2])
+
+    def load_connections(self, node_id):
+        &quot;&quot;&quot;Fetch incoming and outgoing ID links for the given node.&quot;&quot;&quot;
+        connections = []
+
+        # 1. Outgoing Links (Forward Links)
+        sql_out = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.dest = n.id
+            WHERE l.source = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+        self.cursor.execute(sql_out, (node_id,))
+        for row in self.cursor.fetchall():
+            title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+            connections.append(
+                {&quot;type&quot;: &quot;OUT&quot;, &quot;id&quot;: row[0], &quot;title&quot;: title, &quot;file&quot;: row[2]}
+            )
+
+        # 2. Incoming Links (Backlinks)
+        sql_in = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.source = n.id
+            WHERE l.dest = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+        self.cursor.execute(sql_in, (node_id,))
+        for row in self.cursor.fetchall():
+            title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+            connections.append(
+                {&quot;type&quot;: &quot;IN &quot;, &quot;id&quot;: row[0], &quot;title&quot;: title, &quot;file&quot;: row[2]}
+            )
+
+        return connections
+
+    def run(self, stdscr):
+        curses.curs_set(0)
+        curses.use_default_colors()
+
+        # Color setup
+        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Selected
+        curses.init_pair(2, curses.COLOR_GREEN, -1)  # Backlinks
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)  # Outlinks
+        curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header
+
+        self.current_node = self.find_initial_node()
+        self.connections = self.load_connections(self.current_node[0])
+
+        while True:
+            stdscr.clear()
+            height, width = stdscr.getmaxyx()
+
+            # --- Render Header ---
+            _, title, file_path = self.current_node
+            stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
+            stdscr.addstr(0, 0, f&quot; NODE: {title}&quot;[: width - 1])
+            stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
+
+            stdscr.addstr(
+                1, 0, f&quot; File: {file_path}&quot;[: width - 1], curses.A_DIM
+            )
+
+            conn_count = len(self.connections)
+            curr_pos = (
+                f&quot;{self.selected_idx + 1}/{conn_count}&quot; if conn_count else &quot;0/0&quot;
+            )
+            stdscr.addstr(
+                2,
+                0,
+                f&quot; History Stack: {len(self.history)} | Connections: {conn_count} (Item {curr_pos})&quot;[: width - 1],
+            )
+            stdscr.addstr(3, 0, &quot;─&quot; * (width - 1))
+
+            # --- Calculate Viewport Bounds ---
+            max_items = max(1, height - 6)  # Dynamic height calculation
+
+            # Adjust viewport window based on selected index
+            if self.selected_idx &lt; self.top_idx:
+                self.top_idx = self.selected_idx
+            elif self.selected_idx &gt;= self.top_idx + max_items:
+                self.top_idx = self.selected_idx - max_items + 1
+
+            visible_connections = self.connections[
+                self.top_idx : self.top_idx + max_items
+            ]
+
+            # --- Render Connections ---
+            if not self.connections:
+                stdscr.addstr(
+                    5, 2, &quot;&lt; No outgoing links or backlinks &gt;&quot;, curses.A_DIM
+                )
+            else:
+                for idx, conn in enumerate(visible_connections):
+                    actual_idx = self.top_idx + idx
+                    row_y = 5 + idx
+                    prefix = f&quot;[{conn['type']}] &quot;
+                    item_str = f&quot;{prefix}{conn['title']}&quot;[: width - 4]
+
+                    if actual_idx == self.selected_idx:
+                        stdscr.attron(curses.color_pair(1))
+                        stdscr.addstr(row_y, 2, item_str.ljust(width - 4))
+                        stdscr.attroff(curses.color_pair(1))
+                    else:
+                        color = (
+                            curses.color_pair(2)
+                            if conn[&quot;type&quot;] == &quot;IN &quot;
+                            else curses.color_pair(3)
+                        )
+                        stdscr.attron(color)
+                        stdscr.addstr(row_y, 2, prefix)
+                        stdscr.attroff(color)
+                        stdscr.addstr(row_y, 2 + len(prefix), conn[&quot;title&quot;])
+
+            # --- Render Footer ---
+            stdscr.addstr(
+                height - 1,
+                0,
+                &quot; [j/k or ↑/↓]: Select | [l or →/Enter]: Jump | [h or ←/Backspace]: Back | [q]: Quit&quot;[: width - 1],
+                curses.A_REVERSE,
+            )
+
+            stdscr.refresh()
+
+            # --- Handle Input ---
+            key = stdscr.getch()
+
+            if key in (ord(&quot;q&quot;), ord(&quot;Q&quot;)):
+                break
+
+            # Motion Down
+            elif key in (curses.KEY_DOWN, ord(&quot;j&quot;)):
+                if self.connections and self.selected_idx &lt; len(
+                    self.connections
+                ) - 1:
+                    self.selected_idx += 1
+
+            # Motion Up
+            elif key in (curses.KEY_UP, ord(&quot;k&quot;)):
+                if self.selected_idx &gt; 0:
+                    self.selected_idx -= 1
+
+            # Motion Right / Enter (Traverse node)
+            elif key in (curses.KEY_RIGHT, ord(&quot;l&quot;), 10, 13):
+                if self.connections:
+                    target = self.connections[self.selected_idx]
+                    self.history.append(self.current_node)
+                    self.current_node = (
+                        target[&quot;id&quot;],
+                        target[&quot;title&quot;],
+                        target[&quot;file&quot;],
+                    )
+                    self.connections = self.load_connections(
+                        self.current_node[0]
+                    )
+                    self.selected_idx = 0
+                    self.top_idx = 0
+
+            # Motion Left / Backspace (Pop history stack)
+            elif key in (curses.KEY_LEFT, ord(&quot;h&quot;), 8, 127, curses.KEY_BACKSPACE):
+                if self.history:
+                    self.current_node = self.history.pop()
+                    self.connections = self.load_connections(
+                        self.current_node[0]
+                    )
+                    self.selected_idx = 0
+                    self.top_idx = 0
+
+
+def main():
+    start_title = sys.argv[1] if len(sys.argv) &gt; 1 else START_NODE_TITLE
+    db_path = DEFAULT_DB
+
+    nav = OrgRoamNavigator(db_path, start_title)
+    curses.wrapper(nav.run)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+
+</code></pre>
+<hr />
+<h3>What Was Changed</h3>
+<ol>
+<li><strong><code>top_idx</code> offset added:</strong> Tracks which index is rendered at line 5.</li>
+<li><strong>Auto-adjusting window:</strong> Before rendering, <code>self.top_idx</code> moves up or down as <code>self.selected_idx</code> approaches the edges of <code>max_items</code>.</li>
+<li><strong>Reset on navigation:</strong> Moving to a new node resets both <code>selected_idx</code> and <code>top_idx</code> back to <code>0</code>.</li>
+</ol>
+<p>Now when you scroll down on a node with 60 connections, the list glides down naturally and keeps your selection visible.</p>
+<hr />
+<p><strong><a href="20261005_235725_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261005_235731_capture.md&quot;)</p>
