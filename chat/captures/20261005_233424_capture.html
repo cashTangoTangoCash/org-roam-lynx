@@ -1,0 +1,231 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 2</h1>
+<p><strong><a href="20261005_233417_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>Here is a standalone, lightweight terminal navigation script written in Python using <code>curses</code> and standard <code>sqlite3</code>. It provides instant Lynx-like motion (<code>j</code>/<code>k</code> or Down/Up to select, <code>l</code> or Right/Enter to jump into links, <code>h</code> or Left/Backspace to pop back up the history stack).</p>
+<h3>Prerequisites</h3>
+<p>The script requires access to your <code>org-roam.db</code> file. By default, it looks in <code>~/.config/emacs/org-roam.db</code>, but you can pass a custom path as a command-line argument.</p>
+<pre><code class="language-bash">python3 roam_lynx.py ~/.emacs.d/org-roam.db
+
+</code></pre>
+<hr />
+<h3>Prototype Script (<code>roam_lynx.py</code>)</h3>
+<pre><code class="language-python">#!/usr/bin/env python3
+import curses
+import os
+import sqlite3
+import sys
+
+# Default Org-roam database location
+DEFAULT_DB = os.path.expanduser(&quot;~/.config/emacs/org-roam.db&quot;)
+
+
+class OrgRoamNavigator:
+
+    def __init__(self, db_path):
+        self.db_path = db_path
+        if not os.path.exists(self.db_path):
+            print(f&quot;Error: Database not found at {self.db_path}&quot;)
+            sys.exit(1)
+        self.conn = sqlite3.connect(self.db_path)
+        self.cursor = self.conn.cursor()
+
+        # Navigation state
+        self.history = []  # Stack of node tuples: (id, title, file)
+        self.current_node = None  # (id, title, file)
+        self.connections = []  # List of dicts representing links
+        self.selected_idx = 0
+
+    def fetch_first_node(self):
+        &quot;&quot;&quot;Fetch the first available node to start browsing.&quot;&quot;&quot;
+        self.cursor.execute(&quot;SELECT id, title, file FROM nodes LIMIT 1;&quot;)
+        row = self.cursor.fetchone()
+        if not row:
+            print(&quot;Error: No nodes found in database.&quot;)
+            sys.exit(1)
+        # Clean title quotes if present in SQLite
+        title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+        return (row[0], title, row[2])
+
+    def load_connections(self, node_id):
+        &quot;&quot;&quot;Fetch incoming and outgoing ID links for the current node.&quot;&quot;&quot;
+        connections = []
+
+        # 1. Outgoing Links (Forward Links)
+        sql_out = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.dest = n.id
+            WHERE l.source = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+        self.cursor.execute(sql_out, (node_id,))
+        for row in self.cursor.fetchall():
+            title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+            connections.append(
+                {&quot;type&quot;: &quot;OUT&quot;, &quot;id&quot;: row[0], &quot;title&quot;: title, &quot;file&quot;: row[2]}
+            )
+
+        # 2. Incoming Links (Backlinks)
+        sql_in = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.source = n.id
+            WHERE l.dest = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+        self.cursor.execute(sql_in, (node_id,))
+        for row in self.cursor.fetchall():
+            title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+            connections.append(
+                {&quot;type&quot;: &quot;IN &quot;, &quot;id&quot;: row[0], &quot;title&quot;: title, &quot;file&quot;: row[2]}
+            )
+
+        return connections
+
+    def run(self, stdscr):
+        # Setup curses environment
+        curses.curs_set(0)
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Selected
+        curses.init_pair(2, curses.COLOR_GREEN, -1)  # Backlinks
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)  # Outlinks
+        curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header/Metadata
+
+        self.current_node = self.fetch_first_node()
+        self.connections = self.load_connections(self.current_node[0])
+
+        while True:
+            stdscr.clear()
+            height, width = stdscr.getmaxyx()
+
+            # Render Header / Node Details
+            _, title, file_path = self.current_node
+            stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
+            stdscr.addstr(0, 0, f&quot; NODE: {title}&quot;[: width - 1])
+            stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
+
+            stdscr.addstr(
+                1, 0, f&quot; File: {file_path}&quot;[: width - 1], curses.A_DIM
+            )
+            stdscr.addstr(
+                2,
+                0,
+                f&quot; History depth: {len(self.history)} | Connections: {len(self.connections)}&quot;[: width - 1],
+            )
+            stdscr.addstr(3, 0, &quot;─&quot; * (width - 1))
+
+            # Render Connections (List)
+            max_items = height - 6
+            if not self.connections:
+                stdscr.addstr(
+                    5, 2, &quot;&lt; No outgoing links or backlinks found &gt;&quot;, curses.A_DIM
+                )
+            else:
+                for idx, conn in enumerate(self.connections[:max_items]):
+                    row_y = 5 + idx
+                    prefix = f&quot;[{conn['type']}] &quot;
+                    item_str = f&quot;{prefix}{conn['title']}&quot;[: width - 4]
+
+                    # Highlight selection
+                    if idx == self.selected_idx:
+                        stdscr.attron(curses.color_pair(1))
+                        stdscr.addstr(row_y, 2, item_str.ljust(width - 4))
+                        stdscr.attroff(curses.color_pair(1))
+                    else:
+                        color = (
+                            curses.color_pair(2)
+                            if conn[&quot;type&quot;] == &quot;IN &quot;
+                            else curses.color_pair(3)
+                        )
+                        stdscr.attron(color)
+                        stdscr.addstr(row_y, 2, prefix)
+                        stdscr.attroff(color)
+                        stdscr.addstr(row_y, 2 + len(prefix), conn[&quot;title&quot;])
+
+            # Render Footer Key Hints
+            stdscr.addstr(
+                height - 1,
+                0,
+                &quot; [j/k or ↑/↓]: Move | [l or →/Enter]: Jump | [h or ←/Backspace]: Back | [q]: Quit&quot;[: width - 1],
+                curses.A_REVERSE,
+            )
+
+            stdscr.refresh()
+
+            # Key Handling
+            key = stdscr.getch()
+
+            if key in (ord(&quot;q&quot;), ord(&quot;Q&quot;)):
+                break
+
+            # Motion Down
+            elif key in (curses.KEY_DOWN, ord(&quot;j&quot;)):
+                if self.connections and self.selected_idx &lt; len(
+                    self.connections
+                ) - 1:
+                    self.selected_idx += 1
+
+            # Motion Up
+            elif key in (curses.KEY_UP, ord(&quot;k&quot;)):
+                if self.selected_idx &gt; 0:
+                    self.selected_idx -= 1
+
+            # Motion Right / Enter (Drill Down)
+            elif key in (curses.KEY_RIGHT, ord(&quot;l&quot;), 10, 13):
+                if self.connections:
+                    target = self.connections[self.selected_idx]
+                    self.history.append(self.current_node)
+                    self.current_node = (
+                        target[&quot;id&quot;],
+                        target[&quot;title&quot;],
+                        target[&quot;file&quot;],
+                    )
+                    self.connections = self.load_connections(
+                        self.current_node[0]
+                    )
+                    self.selected_idx = 0
+
+            # Motion Left / Backspace (Pop History)
+            elif key in (curses.KEY_LEFT, ord(&quot;h&quot;), 8, 127, curses.KEY_BACKSPACE):
+                if self.history:
+                    self.current_node = self.history.pop()
+                    self.connections = self.load_connections(
+                        self.current_node[0]
+                    )
+                    self.selected_idx = 0
+
+
+def main():
+    db_path = sys.argv[1] if len(sys.argv) &gt; 1 else DEFAULT_DB
+    nav = OrgRoamNavigator(db_path)
+    curses.wrapper(nav.run)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+
+</code></pre>
+<hr />
+<h3>How to Run</h3>
+<ol>
+<li>Make the script executable:</li>
+</ol>
+<pre><code class="language-bash">chmod +x roam_lynx.py
+
+</code></pre>
+<ol start="2">
+<li>Execute directly:</li>
+</ol>
+<pre><code class="language-bash">./roam_lynx.py
+
+</code></pre>
+<h3>Key Controls Summary</h3>
+<ul>
+<li><strong><code>j</code> / Down Arrow</strong>: Select next connection.</li>
+<li><strong><code>k</code> / Up Arrow</strong>: Select previous connection.</li>
+<li><strong><code>l</code> / Right Arrow / Enter</strong>: Traverse into the highlighted link.</li>
+<li><strong><code>h</code> / Left Arrow / Backspace</strong>: Step backward in history stack.</li>
+<li><strong><code>q</code></strong>: Exit.</li>
+</ul>
+<hr />
+<p><strong><a href="20261005_233417_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261005_233424_capture.md&quot;)</p>
