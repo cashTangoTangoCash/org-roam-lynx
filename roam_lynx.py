@@ -4,39 +4,57 @@ import os
 import sqlite3
 import sys
 
-# Default Org-roam database location
+# ----------------------------------------------------------------------
+# Configuration / Hardcoded Defaults
+# ----------------------------------------------------------------------
 DEFAULT_DB = os.path.expanduser("~/.emacs.d/org-roam.db")
+
+# HARDCODED STARTING NODE TITLE (substring match)
+# Change this to match a note title in your Org-roam database.
+START_NODE_TITLE = "a bike accident and injury"
 
 
 class OrgRoamNavigator:
 
-    def __init__(self, db_path):
+    def __init__(self, db_path, initial_title):
         self.db_path = db_path
+        self.initial_title = initial_title
+
         if not os.path.exists(self.db_path):
             print(f"Error: Database not found at {self.db_path}")
             sys.exit(1)
+
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
 
         # Navigation state
         self.history = []  # Stack of node tuples: (id, title, file)
         self.current_node = None  # (id, title, file)
-        self.connections = []  # List of dicts representing links
+        self.connections = []  # List of connection dicts
         self.selected_idx = 0
 
-    def fetch_first_node(self):
-        """Fetch the first available node to start browsing."""
+    def find_initial_node(self):
+        """Find node matching START_NODE_TITLE or fall back to the first available node."""
+        if self.initial_title:
+            sql = "SELECT id, title, file FROM nodes WHERE title LIKE ? LIMIT 1;"
+            self.cursor.execute(sql, (f"%{self.initial_title}%",))
+            row = self.cursor.fetchone()
+            if row:
+                title = row[1].strip('"') if row[1] else "Untitled"
+                return (row[0], title, row[2])
+
+        # Fallback if hardcoded title isn't found
         self.cursor.execute("SELECT id, title, file FROM nodes LIMIT 1;")
         row = self.cursor.fetchone()
         if not row:
             print("Error: No nodes found in database.")
             sys.exit(1)
-        # Clean title quotes if present in SQLite
+
         title = row[1].strip('"') if row[1] else "Untitled"
         return (row[0], title, row[2])
 
     def load_connections(self, node_id):
-        """Fetch incoming and outgoing ID links for the current node."""
+        """Fetch incoming and outgoing ID links for the given node."""
         connections = []
 
         # 1. Outgoing Links (Forward Links)
@@ -70,22 +88,23 @@ class OrgRoamNavigator:
         return connections
 
     def run(self, stdscr):
-        # Setup curses environment
         curses.curs_set(0)
         curses.use_default_colors()
+
+        # Color setup
         curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Selected
         curses.init_pair(2, curses.COLOR_GREEN, -1)  # Backlinks
         curses.init_pair(3, curses.COLOR_YELLOW, -1)  # Outlinks
-        curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header/Metadata
+        curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header
 
-        self.current_node = self.fetch_first_node()
+        self.current_node = self.find_initial_node()
         self.connections = self.load_connections(self.current_node[0])
 
         while True:
             stdscr.clear()
             height, width = stdscr.getmaxyx()
 
-            # Render Header / Node Details
+            # --- Render Header ---
             _, title, file_path = self.current_node
             stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
             stdscr.addstr(0, 0, f" NODE: {title}"[: width - 1])
@@ -97,15 +116,15 @@ class OrgRoamNavigator:
             stdscr.addstr(
                 2,
                 0,
-                f" History depth: {len(self.history)} | Connections: {len(self.connections)}"[: width - 1],
+                f" Stack Depth: {len(self.history)} | Connections: {len(self.connections)}"[: width - 1],
             )
             stdscr.addstr(3, 0, "─" * (width - 1))
 
-            # Render Connections (List)
+            # --- Render Connections ---
             max_items = height - 6
             if not self.connections:
                 stdscr.addstr(
-                    5, 2, "< No outgoing links or backlinks found >", curses.A_DIM
+                    5, 2, "< No outgoing links or backlinks >", curses.A_DIM
                 )
             else:
                 for idx, conn in enumerate(self.connections[:max_items]):
@@ -113,7 +132,6 @@ class OrgRoamNavigator:
                     prefix = f"[{conn['type']}] "
                     item_str = f"{prefix}{conn['title']}"[: width - 4]
 
-                    # Highlight selection
                     if idx == self.selected_idx:
                         stdscr.attron(curses.color_pair(1))
                         stdscr.addstr(row_y, 2, item_str.ljust(width - 4))
@@ -129,17 +147,17 @@ class OrgRoamNavigator:
                         stdscr.attroff(color)
                         stdscr.addstr(row_y, 2 + len(prefix), conn["title"])
 
-            # Render Footer Key Hints
+            # --- Render Footer ---
             stdscr.addstr(
                 height - 1,
                 0,
-                " [j/k or ↑/↓]: Move | [l or →/Enter]: Jump | [h or ←/Backspace]: Back | [q]: Quit"[: width - 1],
+                " [j/k or ↑/↓]: Select | [l or →/Enter]: Jump | [h or ←/Backspace]: Back | [q]: Quit"[: width - 1],
                 curses.A_REVERSE,
             )
 
             stdscr.refresh()
 
-            # Key Handling
+            # --- Handle Input ---
             key = stdscr.getch()
 
             if key in (ord("q"), ord("Q")):
@@ -157,7 +175,7 @@ class OrgRoamNavigator:
                 if self.selected_idx > 0:
                     self.selected_idx -= 1
 
-            # Motion Right / Enter (Drill Down)
+            # Motion Right / Enter (Traverse node)
             elif key in (curses.KEY_RIGHT, ord("l"), 10, 13):
                 if self.connections:
                     target = self.connections[self.selected_idx]
@@ -172,7 +190,7 @@ class OrgRoamNavigator:
                     )
                     self.selected_idx = 0
 
-            # Motion Left / Backspace (Pop History)
+            # Motion Left / Backspace (Pop history stack)
             elif key in (curses.KEY_LEFT, ord("h"), 8, 127, curses.KEY_BACKSPACE):
                 if self.history:
                     self.current_node = self.history.pop()
@@ -183,8 +201,11 @@ class OrgRoamNavigator:
 
 
 def main():
-    db_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DB
-    nav = OrgRoamNavigator(db_path)
+    # Pass optional start title as 1st argument, or fallback to START_NODE_TITLE
+    start_title = sys.argv[1] if len(sys.argv) > 1 else START_NODE_TITLE
+    db_path = DEFAULT_DB
+
+    nav = OrgRoamNavigator(db_path, start_title)
     curses.wrapper(nav.run)
 
 

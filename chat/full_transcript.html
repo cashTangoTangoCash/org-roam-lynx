@@ -341,3 +341,241 @@ if __name__ == &quot;__main__&quot;:
 </ul>
 <p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261005_233424_capture.md&quot;)</p>
 <hr />
+<h1>PROMPT 3</h1>
+<p>I think the script has to take a command line input argument of a particular roam node to begin at.  ideally we want to supply a piece of a node title and then use completion to choose which one.   but for now, for quick testing / proof of concept, maybe we should just hard code which roam node to start at, so we can focus on the roaming - if that doesn't work, there is no sense to spend time on the rest of the window dressing.</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261005_234718_capture.md&quot;)</p>
+<hr />
+<h1>RESPONSE 3</h1>
+<p>Hardcoding a initial target node (or allowing a fallback search term in code) lets you validate the motion loop immediately.</p>
+<p>Below is an updated version of the prototype. It hardcodes a initial <code>START_NODE_TITLE</code> to search for when launched without arguments. If it finds a matching node title in your <code>org-roam.db</code>, it opens directly on that node.</p>
+<hr />
+<h3>Updated Prototype (<code>roam_lynx.py</code>)</h3>
+<pre><code class="language-python">#!/usr/bin/env python3
+import curses
+import os
+import sqlite3
+import sys
+
+# ----------------------------------------------------------------------
+# Configuration / Hardcoded Defaults
+# ----------------------------------------------------------------------
+DEFAULT_DB = os.path.expanduser(&quot;~/.config/emacs/org-roam.db&quot;)
+
+# HARDCODED STARTING NODE TITLE (substring match)
+# Change this to match a note title in your Org-roam database.
+START_NODE_TITLE = &quot;Index&quot;
+
+
+class OrgRoamNavigator:
+
+    def __init__(self, db_path, initial_title):
+        self.db_path = db_path
+        self.initial_title = initial_title
+
+        if not os.path.exists(self.db_path):
+            print(f&quot;Error: Database not found at {self.db_path}&quot;)
+            sys.exit(1)
+
+        self.conn = sqlite3.connect(self.db_path)
+        self.cursor = self.conn.cursor()
+
+        # Navigation state
+        self.history = []  # Stack of node tuples: (id, title, file)
+        self.current_node = None  # (id, title, file)
+        self.connections = []  # List of connection dicts
+        self.selected_idx = 0
+
+    def find_initial_node(self):
+        &quot;&quot;&quot;Find node matching START_NODE_TITLE or fall back to the first available node.&quot;&quot;&quot;
+        if self.initial_title:
+            sql = &quot;SELECT id, title, file FROM nodes WHERE title LIKE ? LIMIT 1;&quot;
+            self.cursor.execute(sql, (f&quot;%{self.initial_title}%&quot;,))
+            row = self.cursor.fetchone()
+            if row:
+                title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+                return (row[0], title, row[2])
+
+        # Fallback if hardcoded title isn't found
+        self.cursor.execute(&quot;SELECT id, title, file FROM nodes LIMIT 1;&quot;)
+        row = self.cursor.fetchone()
+        if not row:
+            print(&quot;Error: No nodes found in database.&quot;)
+            sys.exit(1)
+
+        title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+        return (row[0], title, row[2])
+
+    def load_connections(self, node_id):
+        &quot;&quot;&quot;Fetch incoming and outgoing ID links for the given node.&quot;&quot;&quot;
+        connections = []
+
+        # 1. Outgoing Links (Forward Links)
+        sql_out = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.dest = n.id
+            WHERE l.source = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+        self.cursor.execute(sql_out, (node_id,))
+        for row in self.cursor.fetchall():
+            title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+            connections.append(
+                {&quot;type&quot;: &quot;OUT&quot;, &quot;id&quot;: row[0], &quot;title&quot;: title, &quot;file&quot;: row[2]}
+            )
+
+        # 2. Incoming Links (Backlinks)
+        sql_in = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.source = n.id
+            WHERE l.dest = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+        self.cursor.execute(sql_in, (node_id,))
+        for row in self.cursor.fetchall():
+            title = row[1].strip('&quot;') if row[1] else &quot;Untitled&quot;
+            connections.append(
+                {&quot;type&quot;: &quot;IN &quot;, &quot;id&quot;: row[0], &quot;title&quot;: title, &quot;file&quot;: row[2]}
+            )
+
+        return connections
+
+    def run(self, stdscr):
+        curses.curs_set(0)
+        curses.use_default_colors()
+
+        # Color setup
+        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Selected
+        curses.init_pair(2, curses.COLOR_GREEN, -1)  # Backlinks
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)  # Outlinks
+        curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header
+
+        self.current_node = self.find_initial_node()
+        self.connections = self.load_connections(self.current_node[0])
+
+        while True:
+            stdscr.clear()
+            height, width = stdscr.getmaxyx()
+
+            # --- Render Header ---
+            _, title, file_path = self.current_node
+            stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
+            stdscr.addstr(0, 0, f&quot; NODE: {title}&quot;[: width - 1])
+            stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
+
+            stdscr.addstr(
+                1, 0, f&quot; File: {file_path}&quot;[: width - 1], curses.A_DIM
+            )
+            stdscr.addstr(
+                2,
+                0,
+                f&quot; Stack Depth: {len(self.history)} | Connections: {len(self.connections)}&quot;[: width - 1],
+            )
+            stdscr.addstr(3, 0, &quot;─&quot; * (width - 1))
+
+            # --- Render Connections ---
+            max_items = height - 6
+            if not self.connections:
+                stdscr.addstr(
+                    5, 2, &quot;&lt; No outgoing links or backlinks &gt;&quot;, curses.A_DIM
+                )
+            else:
+                for idx, conn in enumerate(self.connections[:max_items]):
+                    row_y = 5 + idx
+                    prefix = f&quot;[{conn['type']}] &quot;
+                    item_str = f&quot;{prefix}{conn['title']}&quot;[: width - 4]
+
+                    if idx == self.selected_idx:
+                        stdscr.attron(curses.color_pair(1))
+                        stdscr.addstr(row_y, 2, item_str.ljust(width - 4))
+                        stdscr.attroff(curses.color_pair(1))
+                    else:
+                        color = (
+                            curses.color_pair(2)
+                            if conn[&quot;type&quot;] == &quot;IN &quot;
+                            else curses.color_pair(3)
+                        )
+                        stdscr.attron(color)
+                        stdscr.addstr(row_y, 2, prefix)
+                        stdscr.attroff(color)
+                        stdscr.addstr(row_y, 2 + len(prefix), conn[&quot;title&quot;])
+
+            # --- Render Footer ---
+            stdscr.addstr(
+                height - 1,
+                0,
+                &quot; [j/k or ↑/↓]: Select | [l or →/Enter]: Jump | [h or ←/Backspace]: Back | [q]: Quit&quot;[: width - 1],
+                curses.A_REVERSE,
+            )
+
+            stdscr.refresh()
+
+            # --- Handle Input ---
+            key = stdscr.getch()
+
+            if key in (ord(&quot;q&quot;), ord(&quot;Q&quot;)):
+                break
+
+            # Motion Down
+            elif key in (curses.KEY_DOWN, ord(&quot;j&quot;)):
+                if self.connections and self.selected_idx &lt; len(
+                    self.connections
+                ) - 1:
+                    self.selected_idx += 1
+
+            # Motion Up
+            elif key in (curses.KEY_UP, ord(&quot;k&quot;)):
+                if self.selected_idx &gt; 0:
+                    self.selected_idx -= 1
+
+            # Motion Right / Enter (Traverse node)
+            elif key in (curses.KEY_RIGHT, ord(&quot;l&quot;), 10, 13):
+                if self.connections:
+                    target = self.connections[self.selected_idx]
+                    self.history.append(self.current_node)
+                    self.current_node = (
+                        target[&quot;id&quot;],
+                        target[&quot;title&quot;],
+                        target[&quot;file&quot;],
+                    )
+                    self.connections = self.load_connections(
+                        self.current_node[0]
+                    )
+                    self.selected_idx = 0
+
+            # Motion Left / Backspace (Pop history stack)
+            elif key in (curses.KEY_LEFT, ord(&quot;h&quot;), 8, 127, curses.KEY_BACKSPACE):
+                if self.history:
+                    self.current_node = self.history.pop()
+                    self.connections = self.load_connections(
+                        self.current_node[0]
+                    )
+                    self.selected_idx = 0
+
+
+def main():
+    # Pass optional start title as 1st argument, or fallback to START_NODE_TITLE
+    start_title = sys.argv[1] if len(sys.argv) &gt; 1 else START_NODE_TITLE
+    db_path = DEFAULT_DB
+
+    nav = OrgRoamNavigator(db_path, start_title)
+    curses.wrapper(nav.run)
+
+
+if __name__ == &quot;__main__&quot;:
+    main()
+
+</code></pre>
+<hr />
+<h3>Testing Steps</h3>
+<ol>
+<li>Set <code>START_NODE_TITLE = &quot;Index&quot;</code> (or any node title present in your notes) inside the script.</li>
+<li>Run directly:</li>
+</ol>
+<pre><code class="language-bash">python3 roam_lynx.py
+
+</code></pre>
+<ol start="3">
+<li>Test traversing forward through links (<code>l</code> or Right Arrow) and stepping back (<code>h</code> or Left Arrow).</li>
+</ol>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261005_234723_capture.md&quot;)</p>
+<hr />
