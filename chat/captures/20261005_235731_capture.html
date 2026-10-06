@@ -1,6 +1,6 @@
 <style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
 <h1>RESPONSE 4</h1>
-<p><strong><a href="20261005_235725_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p><strong><a href="20261005_235725_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261006_001203_capture.html">Next →</a></strong></p>
 <hr />
 <p>That bug happens because <code>curses</code> renders list rows using <code>enumerate(self.connections[:max_items])</code>, while the key handling allows <code>selected_idx</code> to keep incrementing all the way to length of <code>connections</code>. When <code>selected_idx</code> exceeds <code>max_items</code>, the highlight ring moves off-screen while the visible list remains anchored at the top!</p>
 <p>The good news: <strong>you do not need a full pager.</strong> You only need a rolling offset window (typically 3–5 lines of arithmetic) to keep <code>selected_idx</code> pinned inside the visible viewport.</p>
@@ -261,5 +261,5 @@ if __name__ == &quot;__main__&quot;:
 </ol>
 <p>Now when you scroll down on a node with 60 connections, the list glides down naturally and keeps your selection visible.</p>
 <hr />
-<p><strong><a href="20261005_235725_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p><strong><a href="20261005_235725_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261006_001203_capture.html">Next →</a></strong></p>
 <p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261005_235731_capture.md&quot;)</p>
