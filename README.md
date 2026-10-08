@@ -4,24 +4,14 @@
 
 Move through your notes the way you move through directories in Midnight Commander or follow links in Lynx: pick a node, see everything it links to and everything that links back to it, press a key to jump, press another to go back. No browser, no server, no waiting.
 
-```
- NODE: Bike accident and injury
- File: /home/you/org/roam/20240312-bike-accident.org
- History Stack: 2 | Connections: 5 (Item 1/5)
-────────────────────────────────────────────────────────────
-  [OUT] Physical therapy log
-  [OUT] Insurance claim
-  [IN ] Summer 2024
-  [IN ] Helmet research
-  [IN ] Things I learned the hard way
-────────────────────────────────────────────────────────────
-  file · 212 words · 3 subheadings · 2 out / 3 in
-  * Physical therapy log
-    Week 1: mostly rest. Ice, elevation, and ...
-    … 6 more lines
-```
+Choose a starting node via the shell script:
+![Choose a starting node with the shell script](docs/images/choose-starting-node-with-shell-script.jpg)
 
-> _Tip: replace the sketch above with a real screenshot or an asciinema recording once you have one. It's the single best thing you can add to this README._
+Roam around your org roam node network (preview turned off):
+![Roam around lynx-style without preview](docs/images/roam-around-without-preview.jpg)
+
+Roam around your org roam node network (preview turned on):
+![Roam around lynx-style with preview](docs/images/roam-around-with-preview.jpg)
 
 ## Why?
 
@@ -58,7 +48,7 @@ It's not a replacement for org-roam-ui's big-picture view. It's the fast lane fo
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/org-roam-lynx.git
+git clone https://github.com/cashTangoTangoCash/org-roam-lynx.git
 cd org-roam-lynx
 
 # Put the files somewhere on your PATH
@@ -156,11 +146,18 @@ Because it reads the database rather than your files, it's only as current as Or
 
 ## Contributing
 
-Issues and pull requests are welcome. This is a small project and I'd like to keep it fast and dependency-free.
+This is a personal project that I share in case it’s useful. I may not respond to issues or pull requests, and I make no promises about support. Feel free to fork it.
+
+## How it was Developed
+
+This script was built through an iterative dialogue with Gemini (free
+version) and Claude (free version). For a detailed look at the logic,
+the alternative approaches considered, and the evolution of the code,
+check the contents of the chat/ folder in this repository.
 
 ## License
 
-Choose a license and add a `LICENSE` file. [MIT](https://choosealicense.com/licenses/mit/) is a common choice for small tools like this.
+See LICENSE file
 
 ## Acknowledgments
 

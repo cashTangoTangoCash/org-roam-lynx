@@ -1,0 +1,43 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 15</h1>
+<p><strong><a href="20261008_170224_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261008_170235_capture.html">Next →</a></strong></p>
+<hr />
+<p>Yes, a couple of lines will do it, and so will running the Python half by hand. Here are the steps in order, cheapest first.</p>
+<p><strong>1. Run the Python script directly, bypassing the shell script.</strong> This tells you which half is broken:</p>
+<pre><code class="language-bash">python3 ~/.local/bin/org_roam_lynx_browse_graph.py &quot;some node title you know exists&quot;
+</code></pre>
+<p>If that works, the problem is in the handoff. If it also exits immediately, the problem is in Python.</p>
+<p><strong>2. Add debug output around the handoff</strong> (at the bottom of the shell script):</p>
+<pre><code class="language-bash">if [[ -n &quot;$SELECTION&quot; ]]; then
+    NODE_ID=$(echo &quot;$SELECTION&quot; | cut -f4)
+
+    echo &quot;DEBUG py=[$PYTHON_NAV_SCRIPT] db=[$DB_PATH] id=[$NODE_ID]&quot; &gt;&amp;2
+    python3 &quot;$PYTHON_NAV_SCRIPT&quot; --db &quot;$DB_PATH&quot; --id &quot;$NODE_ID&quot;
+    echo &quot;DEBUG python exited with status $?&quot; &gt;&amp;2
+else
+    echo &quot;DEBUG: SELECTION was empty&quot; &gt;&amp;2
+fi
+</code></pre>
+<p>This checks three things. If <code>id=[]</code> is empty, the fourth column isn't coming through. If you see <code>SELECTION was empty</code>, fzf returned nothing. If you see both a good ID and a non-zero exit status, Python is what's quitting. (<code>bash -x script.sh</code> shows every command as it runs, if you want the firehose instead.)</p>
+<p><strong>3. Capture Python's error message.</strong> I suspect this is the real culprit. <code>find_initial_node</code> runs inside <code>curses.wrapper</code>, so when the ID isn't found, the script prints its &quot;No node with ID ...&quot; error and exits while curses owns the screen. Curses then restores your terminal and the message vanishes, which looks exactly like &quot;exits without proceeding.&quot; Redirect stderr to a file so it survives:</p>
+<pre><code class="language-bash">python3 ~/.local/bin/org_roam_lynx_browse_graph.py --db &quot;$HOME/.emacs.d/org-roam.db&quot; --id &quot;PASTE-AN-ID&quot; 2&gt;/tmp/lynx.err
+cat /tmp/lynx.err
+</code></pre>
+<p>Use a real DB path and a real node ID, which the DEBUG line in step 2 will show you.</p>
+<p><strong>A permanent fix for the vanishing errors:</strong> do the initial lookup before curses starts, so any error prints normally. In <code>__init__</code>, as the very last two lines:</p>
+<pre><code class="language-python">    self.current_node = self.find_initial_node()
+    self.connections = self.load_connections(self.current_node[0])
+</code></pre>
+<p>Then delete those same two lines from the top of <code>run</code>. This is the option I suggested earlier for the Pyright warning, and it fixes both problems at once.</p>
+<p><strong>Two quick sanity checks</strong> while you're at it:</p>
+<ul>
+<li><strong>Is the new Python script the one being run?</strong> The launcher defaults to <code>~/.local/bin/org_roam_lynx_browse_graph.py</code>. If you edited a copy in your repo directory but never reinstalled it, the old version is running, and it doesn't understand <code>--db</code> or <code>--id</code>.</li>
+<li><strong>Does the ID exist as the script expects?</strong> Run this and check that you get a row back:
+<pre><code class="language-bash">sqlite3 ~/.emacs.d/org-roam.db &quot;SELECT id, title FROM nodes LIMIT 3;&quot;
+</code></pre>
+The IDs should look like <code>&quot;3f2a...-....&quot;</code>, with literal quote characters. The Python lookup handles both forms.</li>
+</ul>
+<p>If you run steps 1 and 2 and send me the DEBUG lines plus whatever Python prints, I can pinpoint it from there.</p>
+<hr />
+<p><strong><a href="20261008_170224_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261008_170235_capture.html">Next →</a></strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_170232_capture.md&quot;)</p>

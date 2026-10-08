@@ -2232,3 +2232,146 @@ The README still has three placeholders: `YOUR-USERNAME`, the sketch that should
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_160814_capture.md")
 
 ---
+
+# PROMPT 15
+the scripts are not working - let's figure it out.  if I run the shell script, I can choose a node as usual.  but then the script exits without proceeding into the python script.  what is your recommendation on how to debug this?  adding a line or two to print something out?
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_170224_capture.md")
+
+---
+
+# RESPONSE 15
+Yes, a couple of lines will do it, and so will running the Python half by hand. Here are the steps in order, cheapest first.
+
+**1. Run the Python script directly, bypassing the shell script.** This tells you which half is broken:
+
+```bash
+python3 ~/.local/bin/org_roam_lynx_browse_graph.py "some node title you know exists"
+```
+
+If that works, the problem is in the handoff. If it also exits immediately, the problem is in Python.
+
+**2. Add debug output around the handoff** (at the bottom of the shell script):
+
+```bash
+if [[ -n "$SELECTION" ]]; then
+    NODE_ID=$(echo "$SELECTION" | cut -f4)
+
+    echo "DEBUG py=[$PYTHON_NAV_SCRIPT] db=[$DB_PATH] id=[$NODE_ID]" >&2
+    python3 "$PYTHON_NAV_SCRIPT" --db "$DB_PATH" --id "$NODE_ID"
+    echo "DEBUG python exited with status $?" >&2
+else
+    echo "DEBUG: SELECTION was empty" >&2
+fi
+```
+
+This checks three things. If `id=[]` is empty, the fourth column isn't coming through. If you see `SELECTION was empty`, fzf returned nothing. If you see both a good ID and a non-zero exit status, Python is what's quitting. (`bash -x script.sh` shows every command as it runs, if you want the firehose instead.)
+
+**3. Capture Python's error message.** I suspect this is the real culprit. `find_initial_node` runs inside `curses.wrapper`, so when the ID isn't found, the script prints its "No node with ID ..." error and exits while curses owns the screen. Curses then restores your terminal and the message vanishes, which looks exactly like "exits without proceeding." Redirect stderr to a file so it survives:
+
+```bash
+python3 ~/.local/bin/org_roam_lynx_browse_graph.py --db "$HOME/.emacs.d/org-roam.db" --id "PASTE-AN-ID" 2>/tmp/lynx.err
+cat /tmp/lynx.err
+```
+
+Use a real DB path and a real node ID, which the DEBUG line in step 2 will show you.
+
+**A permanent fix for the vanishing errors:** do the initial lookup before curses starts, so any error prints normally. In `__init__`, as the very last two lines:
+
+```python
+    self.current_node = self.find_initial_node()
+    self.connections = self.load_connections(self.current_node[0])
+```
+
+Then delete those same two lines from the top of `run`. This is the option I suggested earlier for the Pyright warning, and it fixes both problems at once.
+
+**Two quick sanity checks** while you're at it:
+
+- **Is the new Python script the one being run?** The launcher defaults to `~/.local/bin/org_roam_lynx_browse_graph.py`. If you edited a copy in your repo directory but never reinstalled it, the old version is running, and it doesn't understand `--db` or `--id`.
+- **Does the ID exist as the script expects?** Run this and check that you get a row back:
+  ```bash
+  sqlite3 ~/.emacs.d/org-roam.db "SELECT id, title FROM nodes LIMIT 3;"
+  ```
+  The IDs should look like `"3f2a...-...."`, with literal quote characters. The Python lookup handles both forms.
+
+If you run steps 1 and 2 and send me the DEBUG lines plus whatever Python prints, I can pinpoint it from there.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_170232_capture.md")
+
+---
+
+# PROMPT 16
+[dad84@dad84-2013PC ~]$ org_roam_lynx_browse_graph.py "python"
+[dad84@dad84-2013PC ~]$ 
+
+no output from python script - no roaming - nothing
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_170235_capture.md")
+
+---
+
+# RESPONSE 16
+No output at all, not even a traceback, usually means Python ran the file but never called `main()`. My suspect is the bottom of the file. When I gave you the replacement `main()`, the old file had this right after it:
+
+```python
+if __name__ == "__main__":
+  main()
+```
+
+If that got replaced along with `main()`, Python defines everything and exits silently. That matches both symptoms, since the shell script would also run it and then return with nothing happening.
+
+**Check it:**
+
+```bash
+tail -n 25 ~/.local/bin/org_roam_lynx_browse_graph.py
+```
+
+The last lines should be the `if __name__ == "__main__":` block. If they aren't, add this at the very end of the file, with no indentation:
+
+```python
+if __name__ == "__main__":
+  main()
+```
+
+**If the block is there**, run these two checks and send me the output:
+
+```bash
+python3 ~/.local/bin/org_roam_lynx_browse_graph.py "python"; echo "exit status: $?"
+grep -n "def main\|__main__\|parse_args\|curses.wrapper" ~/.local/bin/org_roam_lynx_browse_graph.py
+```
+
+The exit status shows whether it ended cleanly (0) or quit on purpose (1). The `grep` shows whether `main` still contains the `argparse` code and the `curses.wrapper(nav.run)` call. It's also worth making sure `~/.local/bin` has the new version of the script. If you edited a copy in your repo, the installed one may still be the old one.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_170241_capture.md")
+
+---
+
+# PROMPT 17
+Haha you know bad vibe-coders - you caught me.  I wonder why pyright doesn't complain when this super-common piece of code was carelessly deleted / is absent.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_170244_capture.md")
+
+---
+
+# RESPONSE 17
+Pyright is a type checker, and a missing `if __name__ == "__main__":` block isn't a type error or even an error in the language. A file that defines functions and classes and then ends is a perfectly valid Python module. It's what every library looks like. Pyright has no way to know you meant this file to be a script rather than something to import.
+
+Pyright also doesn't flag `main()` as unused. Top-level functions count as part of a module's public interface, since something else might import them. It reports unused imports and local variables (with the right settings), but not unused public functions.
+
+Linters don't catch this either. Pylint, Ruff and flake8 have no rule for "script is missing its entry point." Nothing can tell a script from a library by inspection.
+
+What catches this is running the thing after an edit. The cheapest check, now that you have `argparse`, is:
+
+```bash
+org_roam_lynx_browse_graph.py --help
+```
+
+A working script prints the usage text and exits. A script with no entry point prints nothing, which would have shown the problem immediately. It's also a good habit after any large paste-in edit, because it exercises the file's imports and argument parsing without needing a terminal UI or a database.
+
+If you want a bit more safety, `python3 -m py_compile file.py` catches syntax errors from a bad paste, and Pyright catches the type-level slips. Neither replaces actually running the script.
+
+When you've restored the block, let me know whether the browser comes up. If it still misbehaves, the next suspect is the ID or title lookup.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_170251_capture.md")
+
+---

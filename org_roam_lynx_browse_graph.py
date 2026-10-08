@@ -600,3 +600,6 @@ def main():
 
   nav = OrgRoamNavigator(resolve_db_path(args.db), args.title, args.node_id)
   curses.wrapper(nav.run)
+
+if __name__ == "__main__":
+  main()
