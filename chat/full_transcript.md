@@ -1479,3 +1479,317 @@ A few notes:
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_130410_capture.md")
 
 ---
+
+# PROMPT 8
+so, what happens if the user is working in org roam in emacs, and does things that cause the roam database to be updated, while at the same time our python script is still running?  is there an issue there?  does the python script end up using an outdated roam database, leading to unexpected results?
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133837_capture.md")
+
+---
+
+# RESPONSE 8
+Short answer: no crashes or corruption to worry about, but yes, there are a few staleness quirks. Some are worth handling.
+
+**Why it's mostly safe**
+
+- Your script only reads. SQLite handles a reader and a writer on the same file fine, and each query sees a consistent snapshot.
+- Your script never holds a long-lived read transaction. Python's `sqlite3` only opens implicit transactions for INSERT/UPDATE/DELETE, so each `SELECT` runs and finishes on its own. That means every call to `load_connections` sees the database as it is *at that moment*, not as it was at startup.
+
+So the database isn't "outdated" in the sense of being a frozen copy. The staleness comes from what your script caches in memory.
+
+**Where staleness can actually bite you**
+
+1. **The connection list is only loaded on navigation.** If you're sitting on a node and add a link in Emacs, the list on screen won't change until you move to another node (or back). That's the most common "huh?" moment.
+
+2. **The history stack holds `(id, title, file)` tuples.** If you rename a node or move/rename its file, going back pops the old title and file path. The *connections* will be fresh, but the header will show the old title and file. The `e` command passes the ID to `org-roam-node-from-id`, so it still works for renames, but the fallback `find-file` would use a stale path.
+
+3. **Deleted nodes.** If a node in your history or connection list gets deleted, `load_connections` just returns an empty list (the joins find nothing), and `e` falls into the `find-file` fallback, which could open a nonexistent file or create a new empty buffer. Not catastrophic, but surprising.
+
+4. **Locking and `database is locked`.** org-roam writes in bursts (on save, during `org-roam-db-sync`). Python's default busy timeout is 5 seconds, so short writes are fine. A full sync on a large database could, in theory, exceed that and raise `sqlite3.OperationalError`, which would currently crash your curses UI. Whether the DB is in WAL mode matters here too. In rollback-journal mode (the default, which I believe org-roam uses), a writer holding the lock blocks readers briefly.
+
+5. **Emacs-side DB staleness is the other direction.** org-roam only updates the DB when it saves a file (with `org-roam-db-autosync-mode`). So if you edit a link in Emacs but haven't saved, your script won't see it. That's not a bug in the script, just something to keep in mind.
+
+**Cheap fixes, in order of value**
+
+- **Refresh key.** Bind `r` to reload connections for the current node, preserving the selection if possible. This directly solves #1.
+- **Reload node info on navigation, including back.** Instead of trusting the history tuple, re-query `id, title, file` by ID when popping history. If the node is gone, show a status message and skip it.
+- **Catch `sqlite3.OperationalError` around queries** and put the message in `self.status` instead of crashing. Optionally retry once.
+- **Open read-only** to guarantee you never interfere with Emacs:
+  ```python
+  self.conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=10)
+  ```
+  The longer `timeout` also reduces lock errors.
+- **Optional auto-refresh:** check the DB file's mtime (`os.stat(self.db_path).st_mtime`) each loop and reload connections when it changes. With `stdscr.timeout(1000)`, `getch()` returns `-1` periodically so the loop can notice changes without a keypress. This is the "live" approach, but it's more machinery than most people need; a manual `r` is usually enough.
+
+I can write up the `r` refresh, the by-ID re-lookup helper, and the error handling as a patch in the same style as the `e` changes if you'd like.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133843_capture.md")
+
+---
+
+# PROMPT 9
+write up the `r` refresh, the by-ID re-lookup helper, and the error handling as a patch in the same style as the `e` changes
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133845_capture.md")
+
+---
+
+# RESPONSE 9
+Same format as the `e` patch. It assumes you've already applied that one, so `self.status` and the footer status logic exist.
+
+**1. Imports** (top of file):
+
+```python
+import time
+```
+
+**2. Open the DB read-only with a longer timeout** (in `__init__`, replacing the `sqlite3.connect` line):
+
+```python
+    self.conn = sqlite3.connect(
+        f"file:{self.db_path}?mode=ro", uri=True, timeout=10
+    )
+```
+
+Also add this next to the other navigation state:
+
+```python
+    self.db_ok = True  # False if the most recent query failed
+```
+
+**3. Add the query wrapper and helpers** (after `find_initial_node`):
+
+```python
+  @staticmethod
+  def _clean(title):
+    return title.strip('"') if title else "Untitled"
+
+  def _query(self, sql, params=()):
+    """Run a SELECT with one retry. On failure, set status and return []."""
+    self.db_ok = True
+    for attempt in range(2):
+      try:
+        self.cursor.execute(sql, params)
+        return self.cursor.fetchall()
+      except sqlite3.Error as e:
+        if attempt == 0:
+          time.sleep(0.2)
+          continue
+        self.db_ok = False
+        self.status = f"DB error: {e}"
+    return []
+
+  def lookup_node(self, node_id):
+    """Re-read (id, title, file) by ID. Returns None if missing or on DB error.
+
+    Check self.db_ok afterward to tell the two apart.
+    """
+    rows = self._query(
+        "SELECT id, title, file FROM nodes WHERE id = ?;", (node_id,)
+    )
+    if not rows:
+      return None
+    row = rows[0]
+    return (row[0], self._clean(row[1]), row[2])
+```
+
+**4. Replace `load_connections`** so it uses the wrapper:
+
+```python
+  def load_connections(self, node_id):
+    """Fetch incoming and outgoing ID links for the given node."""
+    connections = []
+
+    sql_out = """
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.dest = n.id
+            WHERE l.source = ? AND l.type = '"id"';
+        """
+    for row in self._query(sql_out, (node_id,)):
+      connections.append(
+          {"type": "OUT", "id": row[0], "title": self._clean(row[1]), "file": row[2]}
+      )
+
+    sql_in = """
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.source = n.id
+            WHERE l.dest = ? AND l.type = '"id"';
+        """
+    for row in self._query(sql_in, (node_id,)):
+      connections.append(
+          {"type": "IN ", "id": row[0], "title": self._clean(row[1]), "file": row[2]}
+      )
+
+    return connections
+```
+
+**5. Add `go_back` and `refresh` methods** (after `visit_in_emacs`, or after `load_connections` if you skipped that one):
+
+```python
+  def go_back(self):
+    """Pop history, re-reading each node and skipping any that were deleted."""
+    while self.history:
+      prev = self.history.pop()
+      node = self.lookup_node(prev[0])
+      if node:
+        self.current_node = node
+        self.connections = self.load_connections(node[0])
+        self.selected_idx = 0
+        self.top_idx = 0
+        return
+      if not self.db_ok:
+        self.history.append(prev)  # DB hiccup, not a deletion: keep it
+        return
+      self.status = f"Skipped deleted node: {prev[1]}"
+
+  def refresh(self):
+    """Re-read the current node and its connections, keeping the selection."""
+    selected_key = None
+    if self.connections and self.selected_idx < len(self.connections):
+      c = self.connections[self.selected_idx]
+      selected_key = (c["type"], c["id"])
+
+    fresh = self.lookup_node(self.current_node[0])
+    if fresh is None:
+      if not self.db_ok:
+        return  # status already set by _query
+      # Node was deleted out from under us
+      if self.history:
+        self.go_back()
+        self.status = "Current node was deleted; went back"
+      else:
+        self.connections = []
+        self.selected_idx = 0
+        self.top_idx = 0
+        self.status = "Current node no longer exists"
+      return
+
+    self.current_node = fresh  # picks up renamed title / moved file
+    new_conns = self.load_connections(fresh[0])
+    if not self.db_ok:
+      return  # keep the old list rather than blanking it
+    self.connections = new_conns
+
+    # Restore selection by (type, id); otherwise clamp to the new length
+    for i, c in enumerate(self.connections):
+      if (c["type"], c["id"]) == selected_key:
+        self.selected_idx = i
+        break
+    else:
+      self.selected_idx = min(
+          self.selected_idx, max(0, len(self.connections) - 1)
+      )
+
+    if not self.status:
+      self.status = "Refreshed"
+```
+
+**6. Update the key handlers** (in the input section):
+
+Add the refresh key, e.g. right after the `e` handler:
+
+```python
+      elif key in (ord("r"), ord("R")):
+        self.refresh()
+```
+
+Replace the body of the existing back handler so it re-reads nodes instead of trusting the stale tuple:
+
+```python
+      # Motion Left / Backspace (Pop history stack)
+      elif key in (curses.KEY_LEFT, ord("h"), 8, 127, curses.KEY_BACKSPACE):
+        self.go_back()
+```
+
+**7. Guard the `e` handler** against a deleted node (so it doesn't fall into the `find-file` fallback with a stale path):
+
+```python
+      elif key in (ord("e"), ord("E")):
+        node = self.lookup_node(self.current_node[0])
+        if node:
+          self.visit_in_emacs(node)
+        elif self.db_ok:
+          self.status = "Node no longer exists in the database"
+```
+
+**8. Add `[r]: Refresh` to the footer string:**
+
+```python
+      footer = (
+          " [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |"
+          " [r]: Refresh | [e]: Emacs | [q]: Quit"
+      )
+```
+
+Notes:
+
+- **Why `db_ok`:** `_query` returns `[]` on both "no rows" and "query failed," so `db_ok` lets callers tell a deleted node from a locked DB. Without it, a lock timeout would look like a deletion and `refresh` would pop your history.
+- **Failure behavior:** a transient lock now costs one 0.2s retry. If that also fails, you get `DB error: ...` in the footer and the screen keeps its old contents instead of crashing or blanking.
+- **Read-only mode:** `mode=ro` guarantees the script can't interfere with Emacs. If org-roam ever runs the DB in WAL mode, read-only still works as long as the directory is writable, which `~/.emacs.d` normally is.
+- **Not covered:** `find_initial_node` still uses the cursor directly. It runs once before curses starts, so a crash there prints a normal traceback. If you want auto-refresh on DB mtime changes (`stdscr.timeout(1000)` plus an `os.stat` check calling `self.refresh()`), it slots in cleanly on top of this.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133858_capture.md")
+
+---
+
+# PROMPT 10
+pyright is complaining on this line:
+
+fresh = self.lookup_node(self.current_node[0])
+
+ 178  29 error Pyright reportOptionalSubscript Object of type "None" is not subscriptable
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133859_capture.md")
+
+---
+
+# RESPONSE 10
+Pyright is right to complain: `self.current_node` is initialized to `None` in `__init__` and only assigned later in `run`, so its declared type is `None` plus whatever gets assigned. It can't know `refresh` is only called after `run` sets it.
+
+The cleanest fix is to give the attributes real types in `__init__`, so that `current_node` is `Optional[...]` explicitly, and then narrow it at the top of `refresh`.
+
+**1. Imports** (top of file):
+
+```python
+from typing import Optional
+```
+
+**2. Annotate the state in `__init__`:**
+
+```python
+    self.history: list[tuple[str, str, str]] = []
+    self.current_node: Optional[tuple[str, str, str]] = None
+```
+
+**3. Narrow at the top of `refresh`:**
+
+```python
+  def refresh(self):
+    """Re-read the current node and its connections, keeping the selection."""
+    if self.current_node is None:
+      return
+    ...
+```
+
+After that guard, Pyright knows `self.current_node` is a tuple for the rest of the method, so `self.current_node[0]` is fine.
+
+You'll likely see the same error in other places that subscript `self.current_node`: the `e` handler, `visit_in_emacs`'s caller, and the header rendering in `run`. The same fix applies to each: a guard or a local variable.
+
+**Alternative: skip the Optional entirely.** If you'd rather not sprinkle guards everywhere, set `current_node` in `__init__` instead of in `run`. Move the `find_initial_node()` call and the first `load_connections` into `__init__`:
+
+```python
+    self.current_node: tuple[str, str, str] = self.find_initial_node()
+    self.connections = self.load_connections(self.current_node[0])
+```
+
+Then remove those two lines from the top of `run`. The attribute is never `None`, so no guards are needed anywhere. This works well here because `find_initial_node` already runs before curses starts in practice, and it exits with a normal error message if the DB is empty.
+
+One caveat on that alternative: `find_initial_node` uses `self.cursor` directly, and `load_connections` uses `self._query`, which sets `self.status` on errors. Both attributes need to exist before the call, so put those two lines at the *end* of `__init__`, after `self.status`, `self.db_ok`, and the cursor are set up.
+
+I'd go with the second option, since it removes the whole class of "might be None" warnings in one move rather than patching each use site.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133904_capture.md")
+
+---

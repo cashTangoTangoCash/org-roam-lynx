@@ -1,0 +1,44 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 8</h1>
+<p><strong><a href="20261008_133837_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261008_133845_capture.html">Next →</a></strong></p>
+<hr />
+<p>Short answer: no crashes or corruption to worry about, but yes, there are a few staleness quirks. Some are worth handling.</p>
+<p><strong>Why it's mostly safe</strong></p>
+<ul>
+<li>Your script only reads. SQLite handles a reader and a writer on the same file fine, and each query sees a consistent snapshot.</li>
+<li>Your script never holds a long-lived read transaction. Python's <code>sqlite3</code> only opens implicit transactions for INSERT/UPDATE/DELETE, so each <code>SELECT</code> runs and finishes on its own. That means every call to <code>load_connections</code> sees the database as it is <em>at that moment</em>, not as it was at startup.</li>
+</ul>
+<p>So the database isn't &quot;outdated&quot; in the sense of being a frozen copy. The staleness comes from what your script caches in memory.</p>
+<p><strong>Where staleness can actually bite you</strong></p>
+<ol>
+<li>
+<p><strong>The connection list is only loaded on navigation.</strong> If you're sitting on a node and add a link in Emacs, the list on screen won't change until you move to another node (or back). That's the most common &quot;huh?&quot; moment.</p>
+</li>
+<li>
+<p><strong>The history stack holds <code>(id, title, file)</code> tuples.</strong> If you rename a node or move/rename its file, going back pops the old title and file path. The <em>connections</em> will be fresh, but the header will show the old title and file. The <code>e</code> command passes the ID to <code>org-roam-node-from-id</code>, so it still works for renames, but the fallback <code>find-file</code> would use a stale path.</p>
+</li>
+<li>
+<p><strong>Deleted nodes.</strong> If a node in your history or connection list gets deleted, <code>load_connections</code> just returns an empty list (the joins find nothing), and <code>e</code> falls into the <code>find-file</code> fallback, which could open a nonexistent file or create a new empty buffer. Not catastrophic, but surprising.</p>
+</li>
+<li>
+<p><strong>Locking and <code>database is locked</code>.</strong> org-roam writes in bursts (on save, during <code>org-roam-db-sync</code>). Python's default busy timeout is 5 seconds, so short writes are fine. A full sync on a large database could, in theory, exceed that and raise <code>sqlite3.OperationalError</code>, which would currently crash your curses UI. Whether the DB is in WAL mode matters here too. In rollback-journal mode (the default, which I believe org-roam uses), a writer holding the lock blocks readers briefly.</p>
+</li>
+<li>
+<p><strong>Emacs-side DB staleness is the other direction.</strong> org-roam only updates the DB when it saves a file (with <code>org-roam-db-autosync-mode</code>). So if you edit a link in Emacs but haven't saved, your script won't see it. That's not a bug in the script, just something to keep in mind.</p>
+</li>
+</ol>
+<p><strong>Cheap fixes, in order of value</strong></p>
+<ul>
+<li><strong>Refresh key.</strong> Bind <code>r</code> to reload connections for the current node, preserving the selection if possible. This directly solves #1.</li>
+<li><strong>Reload node info on navigation, including back.</strong> Instead of trusting the history tuple, re-query <code>id, title, file</code> by ID when popping history. If the node is gone, show a status message and skip it.</li>
+<li><strong>Catch <code>sqlite3.OperationalError</code> around queries</strong> and put the message in <code>self.status</code> instead of crashing. Optionally retry once.</li>
+<li><strong>Open read-only</strong> to guarantee you never interfere with Emacs:
+<pre><code class="language-python">self.conn = sqlite3.connect(f&quot;file:{self.db_path}?mode=ro&quot;, uri=True, timeout=10)
+</code></pre>
+The longer <code>timeout</code> also reduces lock errors.</li>
+<li><strong>Optional auto-refresh:</strong> check the DB file's mtime (<code>os.stat(self.db_path).st_mtime</code>) each loop and reload connections when it changes. With <code>stdscr.timeout(1000)</code>, <code>getch()</code> returns <code>-1</code> periodically so the loop can notice changes without a keypress. This is the &quot;live&quot; approach, but it's more machinery than most people need; a manual <code>r</code> is usually enough.</li>
+</ul>
+<p>I can write up the <code>r</code> refresh, the by-ID re-lookup helper, and the error handling as a patch in the same style as the <code>e</code> changes if you'd like.</p>
+<hr />
+<p><strong><a href="20261008_133837_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261008_133845_capture.html">Next →</a></strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133843_capture.md&quot;)</p>

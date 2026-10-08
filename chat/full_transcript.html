@@ -1356,3 +1356,251 @@ fi
 </ul>
 <p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_130410_capture.md&quot;)</p>
 <hr />
+<h1>PROMPT 8</h1>
+<p>so, what happens if the user is working in org roam in emacs, and does things that cause the roam database to be updated, while at the same time our python script is still running?  is there an issue there?  does the python script end up using an outdated roam database, leading to unexpected results?</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133837_capture.md&quot;)</p>
+<hr />
+<h1>RESPONSE 8</h1>
+<p>Short answer: no crashes or corruption to worry about, but yes, there are a few staleness quirks. Some are worth handling.</p>
+<p><strong>Why it's mostly safe</strong></p>
+<ul>
+<li>Your script only reads. SQLite handles a reader and a writer on the same file fine, and each query sees a consistent snapshot.</li>
+<li>Your script never holds a long-lived read transaction. Python's <code>sqlite3</code> only opens implicit transactions for INSERT/UPDATE/DELETE, so each <code>SELECT</code> runs and finishes on its own. That means every call to <code>load_connections</code> sees the database as it is <em>at that moment</em>, not as it was at startup.</li>
+</ul>
+<p>So the database isn't &quot;outdated&quot; in the sense of being a frozen copy. The staleness comes from what your script caches in memory.</p>
+<p><strong>Where staleness can actually bite you</strong></p>
+<ol>
+<li>
+<p><strong>The connection list is only loaded on navigation.</strong> If you're sitting on a node and add a link in Emacs, the list on screen won't change until you move to another node (or back). That's the most common &quot;huh?&quot; moment.</p>
+</li>
+<li>
+<p><strong>The history stack holds <code>(id, title, file)</code> tuples.</strong> If you rename a node or move/rename its file, going back pops the old title and file path. The <em>connections</em> will be fresh, but the header will show the old title and file. The <code>e</code> command passes the ID to <code>org-roam-node-from-id</code>, so it still works for renames, but the fallback <code>find-file</code> would use a stale path.</p>
+</li>
+<li>
+<p><strong>Deleted nodes.</strong> If a node in your history or connection list gets deleted, <code>load_connections</code> just returns an empty list (the joins find nothing), and <code>e</code> falls into the <code>find-file</code> fallback, which could open a nonexistent file or create a new empty buffer. Not catastrophic, but surprising.</p>
+</li>
+<li>
+<p><strong>Locking and <code>database is locked</code>.</strong> org-roam writes in bursts (on save, during <code>org-roam-db-sync</code>). Python's default busy timeout is 5 seconds, so short writes are fine. A full sync on a large database could, in theory, exceed that and raise <code>sqlite3.OperationalError</code>, which would currently crash your curses UI. Whether the DB is in WAL mode matters here too. In rollback-journal mode (the default, which I believe org-roam uses), a writer holding the lock blocks readers briefly.</p>
+</li>
+<li>
+<p><strong>Emacs-side DB staleness is the other direction.</strong> org-roam only updates the DB when it saves a file (with <code>org-roam-db-autosync-mode</code>). So if you edit a link in Emacs but haven't saved, your script won't see it. That's not a bug in the script, just something to keep in mind.</p>
+</li>
+</ol>
+<p><strong>Cheap fixes, in order of value</strong></p>
+<ul>
+<li><strong>Refresh key.</strong> Bind <code>r</code> to reload connections for the current node, preserving the selection if possible. This directly solves #1.</li>
+<li><strong>Reload node info on navigation, including back.</strong> Instead of trusting the history tuple, re-query <code>id, title, file</code> by ID when popping history. If the node is gone, show a status message and skip it.</li>
+<li><strong>Catch <code>sqlite3.OperationalError</code> around queries</strong> and put the message in <code>self.status</code> instead of crashing. Optionally retry once.</li>
+<li><strong>Open read-only</strong> to guarantee you never interfere with Emacs:
+<pre><code class="language-python">self.conn = sqlite3.connect(f&quot;file:{self.db_path}?mode=ro&quot;, uri=True, timeout=10)
+</code></pre>
+The longer <code>timeout</code> also reduces lock errors.</li>
+<li><strong>Optional auto-refresh:</strong> check the DB file's mtime (<code>os.stat(self.db_path).st_mtime</code>) each loop and reload connections when it changes. With <code>stdscr.timeout(1000)</code>, <code>getch()</code> returns <code>-1</code> periodically so the loop can notice changes without a keypress. This is the &quot;live&quot; approach, but it's more machinery than most people need; a manual <code>r</code> is usually enough.</li>
+</ul>
+<p>I can write up the <code>r</code> refresh, the by-ID re-lookup helper, and the error handling as a patch in the same style as the <code>e</code> changes if you'd like.</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133843_capture.md&quot;)</p>
+<hr />
+<h1>PROMPT 9</h1>
+<p>write up the <code>r</code> refresh, the by-ID re-lookup helper, and the error handling as a patch in the same style as the <code>e</code> changes</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133845_capture.md&quot;)</p>
+<hr />
+<h1>RESPONSE 9</h1>
+<p>Same format as the <code>e</code> patch. It assumes you've already applied that one, so <code>self.status</code> and the footer status logic exist.</p>
+<p><strong>1. Imports</strong> (top of file):</p>
+<pre><code class="language-python">import time
+</code></pre>
+<p><strong>2. Open the DB read-only with a longer timeout</strong> (in <code>__init__</code>, replacing the <code>sqlite3.connect</code> line):</p>
+<pre><code class="language-python">    self.conn = sqlite3.connect(
+        f&quot;file:{self.db_path}?mode=ro&quot;, uri=True, timeout=10
+    )
+</code></pre>
+<p>Also add this next to the other navigation state:</p>
+<pre><code class="language-python">    self.db_ok = True  # False if the most recent query failed
+</code></pre>
+<p><strong>3. Add the query wrapper and helpers</strong> (after <code>find_initial_node</code>):</p>
+<pre><code class="language-python">  @staticmethod
+  def _clean(title):
+    return title.strip('&quot;') if title else &quot;Untitled&quot;
+
+  def _query(self, sql, params=()):
+    &quot;&quot;&quot;Run a SELECT with one retry. On failure, set status and return [].&quot;&quot;&quot;
+    self.db_ok = True
+    for attempt in range(2):
+      try:
+        self.cursor.execute(sql, params)
+        return self.cursor.fetchall()
+      except sqlite3.Error as e:
+        if attempt == 0:
+          time.sleep(0.2)
+          continue
+        self.db_ok = False
+        self.status = f&quot;DB error: {e}&quot;
+    return []
+
+  def lookup_node(self, node_id):
+    &quot;&quot;&quot;Re-read (id, title, file) by ID. Returns None if missing or on DB error.
+
+    Check self.db_ok afterward to tell the two apart.
+    &quot;&quot;&quot;
+    rows = self._query(
+        &quot;SELECT id, title, file FROM nodes WHERE id = ?;&quot;, (node_id,)
+    )
+    if not rows:
+      return None
+    row = rows[0]
+    return (row[0], self._clean(row[1]), row[2])
+</code></pre>
+<p><strong>4. Replace <code>load_connections</code></strong> so it uses the wrapper:</p>
+<pre><code class="language-python">  def load_connections(self, node_id):
+    &quot;&quot;&quot;Fetch incoming and outgoing ID links for the given node.&quot;&quot;&quot;
+    connections = []
+
+    sql_out = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.dest = n.id
+            WHERE l.source = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+    for row in self._query(sql_out, (node_id,)):
+      connections.append(
+          {&quot;type&quot;: &quot;OUT&quot;, &quot;id&quot;: row[0], &quot;title&quot;: self._clean(row[1]), &quot;file&quot;: row[2]}
+      )
+
+    sql_in = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.source = n.id
+            WHERE l.dest = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+    for row in self._query(sql_in, (node_id,)):
+      connections.append(
+          {&quot;type&quot;: &quot;IN &quot;, &quot;id&quot;: row[0], &quot;title&quot;: self._clean(row[1]), &quot;file&quot;: row[2]}
+      )
+
+    return connections
+</code></pre>
+<p><strong>5. Add <code>go_back</code> and <code>refresh</code> methods</strong> (after <code>visit_in_emacs</code>, or after <code>load_connections</code> if you skipped that one):</p>
+<pre><code class="language-python">  def go_back(self):
+    &quot;&quot;&quot;Pop history, re-reading each node and skipping any that were deleted.&quot;&quot;&quot;
+    while self.history:
+      prev = self.history.pop()
+      node = self.lookup_node(prev[0])
+      if node:
+        self.current_node = node
+        self.connections = self.load_connections(node[0])
+        self.selected_idx = 0
+        self.top_idx = 0
+        return
+      if not self.db_ok:
+        self.history.append(prev)  # DB hiccup, not a deletion: keep it
+        return
+      self.status = f&quot;Skipped deleted node: {prev[1]}&quot;
+
+  def refresh(self):
+    &quot;&quot;&quot;Re-read the current node and its connections, keeping the selection.&quot;&quot;&quot;
+    selected_key = None
+    if self.connections and self.selected_idx &lt; len(self.connections):
+      c = self.connections[self.selected_idx]
+      selected_key = (c[&quot;type&quot;], c[&quot;id&quot;])
+
+    fresh = self.lookup_node(self.current_node[0])
+    if fresh is None:
+      if not self.db_ok:
+        return  # status already set by _query
+      # Node was deleted out from under us
+      if self.history:
+        self.go_back()
+        self.status = &quot;Current node was deleted; went back&quot;
+      else:
+        self.connections = []
+        self.selected_idx = 0
+        self.top_idx = 0
+        self.status = &quot;Current node no longer exists&quot;
+      return
+
+    self.current_node = fresh  # picks up renamed title / moved file
+    new_conns = self.load_connections(fresh[0])
+    if not self.db_ok:
+      return  # keep the old list rather than blanking it
+    self.connections = new_conns
+
+    # Restore selection by (type, id); otherwise clamp to the new length
+    for i, c in enumerate(self.connections):
+      if (c[&quot;type&quot;], c[&quot;id&quot;]) == selected_key:
+        self.selected_idx = i
+        break
+    else:
+      self.selected_idx = min(
+          self.selected_idx, max(0, len(self.connections) - 1)
+      )
+
+    if not self.status:
+      self.status = &quot;Refreshed&quot;
+</code></pre>
+<p><strong>6. Update the key handlers</strong> (in the input section):</p>
+<p>Add the refresh key, e.g. right after the <code>e</code> handler:</p>
+<pre><code class="language-python">      elif key in (ord(&quot;r&quot;), ord(&quot;R&quot;)):
+        self.refresh()
+</code></pre>
+<p>Replace the body of the existing back handler so it re-reads nodes instead of trusting the stale tuple:</p>
+<pre><code class="language-python">      # Motion Left / Backspace (Pop history stack)
+      elif key in (curses.KEY_LEFT, ord(&quot;h&quot;), 8, 127, curses.KEY_BACKSPACE):
+        self.go_back()
+</code></pre>
+<p><strong>7. Guard the <code>e</code> handler</strong> against a deleted node (so it doesn't fall into the <code>find-file</code> fallback with a stale path):</p>
+<pre><code class="language-python">      elif key in (ord(&quot;e&quot;), ord(&quot;E&quot;)):
+        node = self.lookup_node(self.current_node[0])
+        if node:
+          self.visit_in_emacs(node)
+        elif self.db_ok:
+          self.status = &quot;Node no longer exists in the database&quot;
+</code></pre>
+<p><strong>8. Add <code>[r]: Refresh</code> to the footer string:</strong></p>
+<pre><code class="language-python">      footer = (
+          &quot; [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |&quot;
+          &quot; [r]: Refresh | [e]: Emacs | [q]: Quit&quot;
+      )
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li><strong>Why <code>db_ok</code>:</strong> <code>_query</code> returns <code>[]</code> on both &quot;no rows&quot; and &quot;query failed,&quot; so <code>db_ok</code> lets callers tell a deleted node from a locked DB. Without it, a lock timeout would look like a deletion and <code>refresh</code> would pop your history.</li>
+<li><strong>Failure behavior:</strong> a transient lock now costs one 0.2s retry. If that also fails, you get <code>DB error: ...</code> in the footer and the screen keeps its old contents instead of crashing or blanking.</li>
+<li><strong>Read-only mode:</strong> <code>mode=ro</code> guarantees the script can't interfere with Emacs. If org-roam ever runs the DB in WAL mode, read-only still works as long as the directory is writable, which <code>~/.emacs.d</code> normally is.</li>
+<li><strong>Not covered:</strong> <code>find_initial_node</code> still uses the cursor directly. It runs once before curses starts, so a crash there prints a normal traceback. If you want auto-refresh on DB mtime changes (<code>stdscr.timeout(1000)</code> plus an <code>os.stat</code> check calling <code>self.refresh()</code>), it slots in cleanly on top of this.</li>
+</ul>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133858_capture.md&quot;)</p>
+<hr />
+<h1>PROMPT 10</h1>
+<p>pyright is complaining on this line:</p>
+<p>fresh = self.lookup_node(self.current_node[0])</p>
+<p>178  29 error Pyright reportOptionalSubscript Object of type &quot;None&quot; is not subscriptable</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133859_capture.md&quot;)</p>
+<hr />
+<h1>RESPONSE 10</h1>
+<p>Pyright is right to complain: <code>self.current_node</code> is initialized to <code>None</code> in <code>__init__</code> and only assigned later in <code>run</code>, so its declared type is <code>None</code> plus whatever gets assigned. It can't know <code>refresh</code> is only called after <code>run</code> sets it.</p>
+<p>The cleanest fix is to give the attributes real types in <code>__init__</code>, so that <code>current_node</code> is <code>Optional[...]</code> explicitly, and then narrow it at the top of <code>refresh</code>.</p>
+<p><strong>1. Imports</strong> (top of file):</p>
+<pre><code class="language-python">from typing import Optional
+</code></pre>
+<p><strong>2. Annotate the state in <code>__init__</code>:</strong></p>
+<pre><code class="language-python">    self.history: list[tuple[str, str, str]] = []
+    self.current_node: Optional[tuple[str, str, str]] = None
+</code></pre>
+<p><strong>3. Narrow at the top of <code>refresh</code>:</strong></p>
+<pre><code class="language-python">  def refresh(self):
+    &quot;&quot;&quot;Re-read the current node and its connections, keeping the selection.&quot;&quot;&quot;
+    if self.current_node is None:
+      return
+    ...
+</code></pre>
+<p>After that guard, Pyright knows <code>self.current_node</code> is a tuple for the rest of the method, so <code>self.current_node[0]</code> is fine.</p>
+<p>You'll likely see the same error in other places that subscript <code>self.current_node</code>: the <code>e</code> handler, <code>visit_in_emacs</code>'s caller, and the header rendering in <code>run</code>. The same fix applies to each: a guard or a local variable.</p>
+<p><strong>Alternative: skip the Optional entirely.</strong> If you'd rather not sprinkle guards everywhere, set <code>current_node</code> in <code>__init__</code> instead of in <code>run</code>. Move the <code>find_initial_node()</code> call and the first <code>load_connections</code> into <code>__init__</code>:</p>
+<pre><code class="language-python">    self.current_node: tuple[str, str, str] = self.find_initial_node()
+    self.connections = self.load_connections(self.current_node[0])
+</code></pre>
+<p>Then remove those two lines from the top of <code>run</code>. The attribute is never <code>None</code>, so no guards are needed anywhere. This works well here because <code>find_initial_node</code> already runs before curses starts in practice, and it exits with a normal error message if the DB is empty.</p>
+<p>One caveat on that alternative: <code>find_initial_node</code> uses <code>self.cursor</code> directly, and <code>load_connections</code> uses <code>self._query</code>, which sets <code>self.status</code> on errors. Both attributes need to exist before the call, so put those two lines at the <em>end</em> of <code>__init__</code>, after <code>self.status</code>, <code>self.db_ok</code>, and the cursor are set up.</p>
+<p>I'd go with the second option, since it removes the whole class of &quot;might be None&quot; warnings in one move rather than patching each use site.</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133904_capture.md&quot;)</p>
+<hr />

@@ -4,6 +4,7 @@ import curses
 import os
 import sqlite3
 import sys
+import time
 
 # ----------------------------------------------------------------------
 # Configuration / Hardcoded Defaults
@@ -22,16 +23,17 @@ class OrgRoamNavigator:
       print(f"Error: Database not found at {self.db_path}")
       sys.exit(1)
 
-    self.conn = sqlite3.connect(self.db_path)
+    self.conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=10)
     self.cursor = self.conn.cursor()
 
     # Navigation state
-    self.history = []  # Stack of node tuples: (id, title, file)
-    self.current_node = None  # (id, title, file)
-    self.connections = []  # List of connection dicts
+    self.history: list[tuple[str, str, str]] = []
     self.selected_idx = 0
     self.top_idx = 0  # Viewport scroll offset
     self.status = ""  # Transient message shown in the footer
+    self.db_ok = True  # False if the most recent query failed
+    self.current_node: tuple[str, str, str] = self.find_initial_node()
+    self.connections = self.load_connections(self.current_node[0])
     
   def find_initial_node(self):
     """Find node matching START_NODE_TITLE or fall back to the first available node."""
@@ -53,36 +55,62 @@ class OrgRoamNavigator:
     title = row[1].strip('"') if row[1] else "Untitled"
     return (row[0], title, row[2])
 
+  @staticmethod
+  def _clean(title):
+    return title.strip('"') if title else "Untitled"
+
+  def _query(self, sql, params=()):
+    """Run a SELECT with one retry. On failure, set status and return []."""
+    self.db_ok = True
+    for attempt in range(2):
+      try:
+        self.cursor.execute(sql, params)
+        return self.cursor.fetchall()
+      except sqlite3.Error as e:
+        if attempt == 0:
+          time.sleep(0.2)
+          continue
+        self.db_ok = False
+        self.status = f"DB error: {e}"
+    return []
+
+  def lookup_node(self, node_id):
+    """Re-read (id, title, file) by ID. Returns None if missing or on DB error.
+
+    Check self.db_ok afterward to tell the two apart.
+    """
+    rows = self._query(
+        "SELECT id, title, file FROM nodes WHERE id = ?;", (node_id,)
+    )
+    if not rows:
+      return None
+    row = rows[0]
+    return (row[0], self._clean(row[1]), row[2])
+
   def load_connections(self, node_id):
     """Fetch incoming and outgoing ID links for the given node."""
     connections = []
 
-    # 1. Outgoing Links (Forward Links)
     sql_out = """
             SELECT n.id, n.title, n.file
             FROM links l
             JOIN nodes n ON l.dest = n.id
             WHERE l.source = ? AND l.type = '"id"';
         """
-    self.cursor.execute(sql_out, (node_id,))
-    for row in self.cursor.fetchall():
-      title = row[1].strip('"') if row[1] else "Untitled"
+    for row in self._query(sql_out, (node_id,)):
       connections.append(
-          {"type": "OUT", "id": row[0], "title": title, "file": row[2]}
+          {"type": "OUT", "id": row[0], "title": self._clean(row[1]), "file": row[2]}
       )
 
-    # 2. Incoming Links (Backlinks)
     sql_in = """
             SELECT n.id, n.title, n.file
             FROM links l
             JOIN nodes n ON l.source = n.id
             WHERE l.dest = ? AND l.type = '"id"';
         """
-    self.cursor.execute(sql_in, (node_id,))
-    for row in self.cursor.fetchall():
-      title = row[1].strip('"') if row[1] else "Untitled"
+    for row in self._query(sql_in, (node_id,)):
       connections.append(
-          {"type": "IN ", "id": row[0], "title": title, "file": row[2]}
+          {"type": "IN ", "id": row[0], "title": self._clean(row[1]), "file": row[2]}
       )
 
     return connections
@@ -124,6 +152,66 @@ class OrgRoamNavigator:
     except subprocess.TimeoutExpired:
       self.status = "emacsclient timed out"
 
+  def go_back(self):
+    """Pop history, re-reading each node and skipping any that were deleted."""
+    while self.history:
+      prev = self.history.pop()
+      node = self.lookup_node(prev[0])
+      if node:
+        self.current_node = node
+        self.connections = self.load_connections(node[0])
+        self.selected_idx = 0
+        self.top_idx = 0
+        return
+      if not self.db_ok:
+        self.history.append(prev)  # DB hiccup, not a deletion: keep it
+        return
+      self.status = f"Skipped deleted node: {prev[1]}"
+
+  def refresh(self):
+    """Re-read the current node and its connections, keeping the selection."""
+    if self.current_node is None:
+      return
+
+    selected_key = None
+    if self.connections and self.selected_idx < len(self.connections):
+      c = self.connections[self.selected_idx]
+      selected_key = (c["type"], c["id"])
+
+    fresh = self.lookup_node(self.current_node[0])
+    if fresh is None:
+      if not self.db_ok:
+        return  # status already set by _query
+      # Node was deleted out from under us
+      if self.history:
+        self.go_back()
+        self.status = "Current node was deleted; went back"
+      else:
+        self.connections = []
+        self.selected_idx = 0
+        self.top_idx = 0
+        self.status = "Current node no longer exists"
+      return
+
+    self.current_node = fresh  # picks up renamed title / moved file
+    new_conns = self.load_connections(fresh[0])
+    if not self.db_ok:
+      return  # keep the old list rather than blanking it
+    self.connections = new_conns
+
+    # Restore selection by (type, id); otherwise clamp to the new length
+    for i, c in enumerate(self.connections):
+      if (c["type"], c["id"]) == selected_key:
+        self.selected_idx = i
+        break
+    else:
+      self.selected_idx = min(
+          self.selected_idx, max(0, len(self.connections) - 1)
+      )
+
+    if not self.status:
+      self.status = "Refreshed"
+      
   def run(self, stdscr):
     curses.curs_set(0)
     curses.use_default_colors()
@@ -133,9 +221,6 @@ class OrgRoamNavigator:
     curses.init_pair(2, curses.COLOR_GREEN, -1)  # Backlinks
     curses.init_pair(3, curses.COLOR_YELLOW, -1)  # Outlinks
     curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header
-
-    self.current_node = self.find_initial_node()
-    self.connections = self.load_connections(self.current_node[0])
 
     while True:
       stdscr.clear()
@@ -204,8 +289,9 @@ class OrgRoamNavigator:
       # --- Render Footer ---
       footer = (
           " [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |"
-          " [e]: Emacs | [q]: Quit"
+          " [r]: Refresh | [e]: Emacs | [q]: Quit"
       )
+      
       if self.status:
         footer = f" {self.status}"
         self.status = ""  # clears on next redraw (i.e. after next keypress)
@@ -220,8 +306,15 @@ class OrgRoamNavigator:
         break
 
       elif key in (ord("e"), ord("E")):
-        self.visit_in_emacs(self.current_node)
-    
+        node = self.lookup_node(self.current_node[0])
+        if node:
+          self.visit_in_emacs(node)
+        elif self.db_ok:
+          self.status = "Node no longer exists in the database"
+
+      elif key in (ord("r"), ord("R")):
+        self.refresh()
+        
       # Motion Down (Single Line)
       elif key in (curses.KEY_DOWN, ord("j")):
         if self.connections and self.selected_idx < len(self.connections) - 1:
@@ -260,12 +353,7 @@ class OrgRoamNavigator:
 
       # Motion Left / Backspace (Pop history stack)
       elif key in (curses.KEY_LEFT, ord("h"), 8, 127, curses.KEY_BACKSPACE):
-        if self.history:
-          self.current_node = self.history.pop()
-          self.connections = self.load_connections(self.current_node[0])
-          self.selected_idx = 0
-          self.top_idx = 0
-
+          self.go_back()
 
 def main():
   start_title = sys.argv[1] if len(sys.argv) > 1 else START_NODE_TITLE

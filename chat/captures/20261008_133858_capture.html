@@ -1,0 +1,170 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 9</h1>
+<p><strong><a href="20261008_133845_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261008_133859_capture.html">Next →</a></strong></p>
+<hr />
+<p>Same format as the <code>e</code> patch. It assumes you've already applied that one, so <code>self.status</code> and the footer status logic exist.</p>
+<p><strong>1. Imports</strong> (top of file):</p>
+<pre><code class="language-python">import time
+</code></pre>
+<p><strong>2. Open the DB read-only with a longer timeout</strong> (in <code>__init__</code>, replacing the <code>sqlite3.connect</code> line):</p>
+<pre><code class="language-python">    self.conn = sqlite3.connect(
+        f&quot;file:{self.db_path}?mode=ro&quot;, uri=True, timeout=10
+    )
+</code></pre>
+<p>Also add this next to the other navigation state:</p>
+<pre><code class="language-python">    self.db_ok = True  # False if the most recent query failed
+</code></pre>
+<p><strong>3. Add the query wrapper and helpers</strong> (after <code>find_initial_node</code>):</p>
+<pre><code class="language-python">  @staticmethod
+  def _clean(title):
+    return title.strip('&quot;') if title else &quot;Untitled&quot;
+
+  def _query(self, sql, params=()):
+    &quot;&quot;&quot;Run a SELECT with one retry. On failure, set status and return [].&quot;&quot;&quot;
+    self.db_ok = True
+    for attempt in range(2):
+      try:
+        self.cursor.execute(sql, params)
+        return self.cursor.fetchall()
+      except sqlite3.Error as e:
+        if attempt == 0:
+          time.sleep(0.2)
+          continue
+        self.db_ok = False
+        self.status = f&quot;DB error: {e}&quot;
+    return []
+
+  def lookup_node(self, node_id):
+    &quot;&quot;&quot;Re-read (id, title, file) by ID. Returns None if missing or on DB error.
+
+    Check self.db_ok afterward to tell the two apart.
+    &quot;&quot;&quot;
+    rows = self._query(
+        &quot;SELECT id, title, file FROM nodes WHERE id = ?;&quot;, (node_id,)
+    )
+    if not rows:
+      return None
+    row = rows[0]
+    return (row[0], self._clean(row[1]), row[2])
+</code></pre>
+<p><strong>4. Replace <code>load_connections</code></strong> so it uses the wrapper:</p>
+<pre><code class="language-python">  def load_connections(self, node_id):
+    &quot;&quot;&quot;Fetch incoming and outgoing ID links for the given node.&quot;&quot;&quot;
+    connections = []
+
+    sql_out = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.dest = n.id
+            WHERE l.source = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+    for row in self._query(sql_out, (node_id,)):
+      connections.append(
+          {&quot;type&quot;: &quot;OUT&quot;, &quot;id&quot;: row[0], &quot;title&quot;: self._clean(row[1]), &quot;file&quot;: row[2]}
+      )
+
+    sql_in = &quot;&quot;&quot;
+            SELECT n.id, n.title, n.file
+            FROM links l
+            JOIN nodes n ON l.source = n.id
+            WHERE l.dest = ? AND l.type = '&quot;id&quot;';
+        &quot;&quot;&quot;
+    for row in self._query(sql_in, (node_id,)):
+      connections.append(
+          {&quot;type&quot;: &quot;IN &quot;, &quot;id&quot;: row[0], &quot;title&quot;: self._clean(row[1]), &quot;file&quot;: row[2]}
+      )
+
+    return connections
+</code></pre>
+<p><strong>5. Add <code>go_back</code> and <code>refresh</code> methods</strong> (after <code>visit_in_emacs</code>, or after <code>load_connections</code> if you skipped that one):</p>
+<pre><code class="language-python">  def go_back(self):
+    &quot;&quot;&quot;Pop history, re-reading each node and skipping any that were deleted.&quot;&quot;&quot;
+    while self.history:
+      prev = self.history.pop()
+      node = self.lookup_node(prev[0])
+      if node:
+        self.current_node = node
+        self.connections = self.load_connections(node[0])
+        self.selected_idx = 0
+        self.top_idx = 0
+        return
+      if not self.db_ok:
+        self.history.append(prev)  # DB hiccup, not a deletion: keep it
+        return
+      self.status = f&quot;Skipped deleted node: {prev[1]}&quot;
+
+  def refresh(self):
+    &quot;&quot;&quot;Re-read the current node and its connections, keeping the selection.&quot;&quot;&quot;
+    selected_key = None
+    if self.connections and self.selected_idx &lt; len(self.connections):
+      c = self.connections[self.selected_idx]
+      selected_key = (c[&quot;type&quot;], c[&quot;id&quot;])
+
+    fresh = self.lookup_node(self.current_node[0])
+    if fresh is None:
+      if not self.db_ok:
+        return  # status already set by _query
+      # Node was deleted out from under us
+      if self.history:
+        self.go_back()
+        self.status = &quot;Current node was deleted; went back&quot;
+      else:
+        self.connections = []
+        self.selected_idx = 0
+        self.top_idx = 0
+        self.status = &quot;Current node no longer exists&quot;
+      return
+
+    self.current_node = fresh  # picks up renamed title / moved file
+    new_conns = self.load_connections(fresh[0])
+    if not self.db_ok:
+      return  # keep the old list rather than blanking it
+    self.connections = new_conns
+
+    # Restore selection by (type, id); otherwise clamp to the new length
+    for i, c in enumerate(self.connections):
+      if (c[&quot;type&quot;], c[&quot;id&quot;]) == selected_key:
+        self.selected_idx = i
+        break
+    else:
+      self.selected_idx = min(
+          self.selected_idx, max(0, len(self.connections) - 1)
+      )
+
+    if not self.status:
+      self.status = &quot;Refreshed&quot;
+</code></pre>
+<p><strong>6. Update the key handlers</strong> (in the input section):</p>
+<p>Add the refresh key, e.g. right after the <code>e</code> handler:</p>
+<pre><code class="language-python">      elif key in (ord(&quot;r&quot;), ord(&quot;R&quot;)):
+        self.refresh()
+</code></pre>
+<p>Replace the body of the existing back handler so it re-reads nodes instead of trusting the stale tuple:</p>
+<pre><code class="language-python">      # Motion Left / Backspace (Pop history stack)
+      elif key in (curses.KEY_LEFT, ord(&quot;h&quot;), 8, 127, curses.KEY_BACKSPACE):
+        self.go_back()
+</code></pre>
+<p><strong>7. Guard the <code>e</code> handler</strong> against a deleted node (so it doesn't fall into the <code>find-file</code> fallback with a stale path):</p>
+<pre><code class="language-python">      elif key in (ord(&quot;e&quot;), ord(&quot;E&quot;)):
+        node = self.lookup_node(self.current_node[0])
+        if node:
+          self.visit_in_emacs(node)
+        elif self.db_ok:
+          self.status = &quot;Node no longer exists in the database&quot;
+</code></pre>
+<p><strong>8. Add <code>[r]: Refresh</code> to the footer string:</strong></p>
+<pre><code class="language-python">      footer = (
+          &quot; [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |&quot;
+          &quot; [r]: Refresh | [e]: Emacs | [q]: Quit&quot;
+      )
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li><strong>Why <code>db_ok</code>:</strong> <code>_query</code> returns <code>[]</code> on both &quot;no rows&quot; and &quot;query failed,&quot; so <code>db_ok</code> lets callers tell a deleted node from a locked DB. Without it, a lock timeout would look like a deletion and <code>refresh</code> would pop your history.</li>
+<li><strong>Failure behavior:</strong> a transient lock now costs one 0.2s retry. If that also fails, you get <code>DB error: ...</code> in the footer and the screen keeps its old contents instead of crashing or blanking.</li>
+<li><strong>Read-only mode:</strong> <code>mode=ro</code> guarantees the script can't interfere with Emacs. If org-roam ever runs the DB in WAL mode, read-only still works as long as the directory is writable, which <code>~/.emacs.d</code> normally is.</li>
+<li><strong>Not covered:</strong> <code>find_initial_node</code> still uses the cursor directly. It runs once before curses starts, so a crash there prints a normal traceback. If you want auto-refresh on DB mtime changes (<code>stdscr.timeout(1000)</code> plus an <code>os.stat</code> check calling <code>self.refresh()</code>), it slots in cleanly on top of this.</li>
+</ul>
+<hr />
+<p><strong><a href="20261008_133845_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261008_133859_capture.html">Next →</a></strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133858_capture.md&quot;)</p>

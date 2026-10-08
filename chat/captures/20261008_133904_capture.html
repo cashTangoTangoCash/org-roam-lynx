@@ -1,0 +1,32 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 10</h1>
+<p><strong><a href="20261008_133859_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>Pyright is right to complain: <code>self.current_node</code> is initialized to <code>None</code> in <code>__init__</code> and only assigned later in <code>run</code>, so its declared type is <code>None</code> plus whatever gets assigned. It can't know <code>refresh</code> is only called after <code>run</code> sets it.</p>
+<p>The cleanest fix is to give the attributes real types in <code>__init__</code>, so that <code>current_node</code> is <code>Optional[...]</code> explicitly, and then narrow it at the top of <code>refresh</code>.</p>
+<p><strong>1. Imports</strong> (top of file):</p>
+<pre><code class="language-python">from typing import Optional
+</code></pre>
+<p><strong>2. Annotate the state in <code>__init__</code>:</strong></p>
+<pre><code class="language-python">    self.history: list[tuple[str, str, str]] = []
+    self.current_node: Optional[tuple[str, str, str]] = None
+</code></pre>
+<p><strong>3. Narrow at the top of <code>refresh</code>:</strong></p>
+<pre><code class="language-python">  def refresh(self):
+    &quot;&quot;&quot;Re-read the current node and its connections, keeping the selection.&quot;&quot;&quot;
+    if self.current_node is None:
+      return
+    ...
+</code></pre>
+<p>After that guard, Pyright knows <code>self.current_node</code> is a tuple for the rest of the method, so <code>self.current_node[0]</code> is fine.</p>
+<p>You'll likely see the same error in other places that subscript <code>self.current_node</code>: the <code>e</code> handler, <code>visit_in_emacs</code>'s caller, and the header rendering in <code>run</code>. The same fix applies to each: a guard or a local variable.</p>
+<p><strong>Alternative: skip the Optional entirely.</strong> If you'd rather not sprinkle guards everywhere, set <code>current_node</code> in <code>__init__</code> instead of in <code>run</code>. Move the <code>find_initial_node()</code> call and the first <code>load_connections</code> into <code>__init__</code>:</p>
+<pre><code class="language-python">    self.current_node: tuple[str, str, str] = self.find_initial_node()
+    self.connections = self.load_connections(self.current_node[0])
+</code></pre>
+<p>Then remove those two lines from the top of <code>run</code>. The attribute is never <code>None</code>, so no guards are needed anywhere. This works well here because <code>find_initial_node</code> already runs before curses starts in practice, and it exits with a normal error message if the DB is empty.</p>
+<p>One caveat on that alternative: <code>find_initial_node</code> uses <code>self.cursor</code> directly, and <code>load_connections</code> uses <code>self._query</code>, which sets <code>self.status</code> on errors. Both attributes need to exist before the call, so put those two lines at the <em>end</em> of <code>__init__</code>, after <code>self.status</code>, <code>self.db_ok</code>, and the cursor are set up.</p>
+<p>I'd go with the second option, since it removes the whole class of &quot;might be None&quot; warnings in one move rather than patching each use site.</p>
+<hr />
+<p><strong><a href="20261008_133859_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_133904_capture.md&quot;)</p>
