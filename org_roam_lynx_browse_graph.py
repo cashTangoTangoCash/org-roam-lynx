@@ -6,11 +6,25 @@ import sqlite3
 import sys
 import time
 import re
+import argparse
+from pathlib import Path
 
 # ----------------------------------------------------------------------
 # Configuration / Hardcoded Defaults
 # ----------------------------------------------------------------------
-DEFAULT_DB = os.path.expanduser("~/.emacs.d/org-roam.db")
+
+def resolve_db_path(cli_db=None):
+  """--db, then $ORG_ROAM_DB, then XDG location, then ~/.emacs.d."""
+  for explicit in (cli_db, os.environ.get("ORG_ROAM_DB")):
+    if explicit:
+      return os.path.expanduser(explicit)  # trust it; error later if missing
+
+  xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+  xdg_db = os.path.join(xdg, "emacs", "org-roam.db")
+  if os.path.exists(xdg_db):
+    return xdg_db
+  return os.path.expanduser("~/.emacs.d/org-roam.db")
+
 START_NODE_TITLE = "a bike accident and injury"
 PREVIEW_MIN_HEIGHT = 16    # hide the pane on very short terminals
 MAX_READ_CHARS = 200_000   # cap on how much of a file we read
@@ -25,15 +39,17 @@ LINK_RE = re.compile(r"\[\[[^\]]*\]\[([^\]]*)\]\]|\[\[([^\]]*)\]\]")
 
 class OrgRoamNavigator:
 
-  def __init__(self, db_path, initial_title):
+  def __init__(self, db_path, initial_title, initial_id=None):
     self.db_path = db_path
     self.initial_title = initial_title
-
+    self.initial_id = initial_id
+    
     if not os.path.exists(self.db_path):
       print(f"Error: Database not found at {self.db_path}")
       sys.exit(1)
 
-    self.conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=10)
+    db_uri = Path(self.db_path).resolve().as_uri() + "?mode=ro"
+    self.conn = sqlite3.connect(db_uri, uri=True, timeout=10)
     self.cursor = self.conn.cursor()
 
     # Navigation state
@@ -48,24 +64,43 @@ class OrgRoamNavigator:
     self.preview_cache: dict = {}  # (node_id, file mtime_ns) -> preview
     
   def find_initial_node(self):
-    """Find node matching START_NODE_TITLE or fall back to the first available node."""
-    if self.initial_title:
-      sql = "SELECT id, title, file FROM nodes WHERE title LIKE ? LIMIT 1;"
-      self.cursor.execute(sql, (f"%{self.initial_title}%",))
-      row = self.cursor.fetchone()
-      if row:
-        title = row[1].strip('"') if row[1] else "Untitled"
-        return (row[0], title, row[2])
-
-    # Fallback if hardcoded title isn't found
-    self.cursor.execute("SELECT id, title, file FROM nodes LIMIT 1;")
-    row = self.cursor.fetchone()
-    if not row:
-      print("Error: No nodes found in database.")
+    """Start node: by ID if given, else exact title, else substring, else first."""
+    if self.initial_id:
+      node_id = self.initial_id.strip('"')
+      # org-roam stores IDs as printed elisp strings, i.e. wrapped in quotes
+      rows = self._query(
+          "SELECT id, title, file FROM nodes WHERE id = ? OR id = ? LIMIT 1;",
+          (f'"{node_id}"', node_id),
+      )
+      if rows:
+        return (rows[0][0], self._clean(rows[0][1]), rows[0][2])
+      print(
+          f"Error: No node with ID {node_id} in {self.db_path}",
+          file=sys.stderr,
+      )
       sys.exit(1)
 
-    title = row[1].strip('"') if row[1] else "Untitled"
-    return (row[0], title, row[2])
+    if self.initial_title:
+      t = self.initial_title
+      rows = self._query(
+          "SELECT id, title, file FROM nodes WHERE title = ? OR title = ?"
+          " LIMIT 1;",
+          (f'"{t}"', t),
+      )
+      if not rows:
+        rows = self._query(
+            "SELECT id, title, file FROM nodes WHERE title LIKE ? LIMIT 1;",
+            (f"%{t}%",),
+        )
+      if rows:
+        return (rows[0][0], self._clean(rows[0][1]), rows[0][2])
+
+    # Fallback if nothing matched
+    rows = self._query("SELECT id, title, file FROM nodes LIMIT 1;")
+    if not rows:
+      print("Error: No nodes found in database.", file=sys.stderr)
+      sys.exit(1)
+    return (rows[0][0], self._clean(rows[0][1]), rows[0][2])
 
   @staticmethod
   def _clean(title):
@@ -544,12 +579,24 @@ class OrgRoamNavigator:
           self.go_back()
 
 def main():
-  start_title = sys.argv[1] if len(sys.argv) > 1 else START_NODE_TITLE
-  db_path = DEFAULT_DB
+  parser = argparse.ArgumentParser(
+      description="Browse an Org-roam node network in the terminal."
+  )
+  parser.add_argument(
+      "title",
+      nargs="?",
+      default=START_NODE_TITLE,
+      help="start at the node with this title (exact match preferred)",
+  )
+  parser.add_argument(
+      "--id",
+      dest="node_id",
+      help="start at the node with this Org-roam ID (overrides title)",
+  )
+  parser.add_argument(
+      "--db", help="path to org-roam.db (default: see resolution order)"
+  )
+  args = parser.parse_args()
 
-  nav = OrgRoamNavigator(db_path, start_title)
+  nav = OrgRoamNavigator(resolve_db_path(args.db), args.title, args.node_id)
   curses.wrapper(nav.run)
-
-
-if __name__ == "__main__":
-  main()

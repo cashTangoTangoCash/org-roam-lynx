@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
 
-# Paths
-DB_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/emacs/org-roam.db"
-[[ ! -f "$DB_PATH" ]] && DB_PATH="$HOME/.emacs.d/org-roam.db"
+# Paths: ORG_ROAM_DB wins; otherwise XDG location, then ~/.emacs.d
+if [[ -n "$ORG_ROAM_DB" ]]; then
+    DB_PATH="$ORG_ROAM_DB"
+else
+    DB_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/emacs/org-roam.db"
+    [[ ! -f "$DB_PATH" ]] && DB_PATH="$HOME/.emacs.d/org-roam.db"
+fi
 PYTHON_NAV_SCRIPT="${ROAM_LYNX_PY:-$HOME/.local/bin/org_roam_lynx_browse_graph.py}"
 
 # --- HELP HANDLERS ---
 show_brief_help() {
     cat << 'EOF'
-Usage: roam-lynx-find [OPTION] [SEARCH_TERM]
+Usage: org-roam-lynx-find-starting-node-then-browse-graph.sh [OPTION] [SEARCH_TERM]
 
 Search Org-roam nodes/aliases using fzf and open the selection in the terminal Lynx-style node browser.
 
 Options:
   -h, --help            Show this brief command-line help message and exit.
 
+Environment:
+  ORG_ROAM_DB           Path to org-roam.db (default: ~/.config/emacs/org-roam.db,
+                        then ~/.emacs.d/org-roam.db)
+  ROAM_LYNX_PY          Path to org_roam_lynx_browse_graph.py
+
 Examples:
-  roam-lynx-find        Interactive fzf search through all notes (sorted by mtime).
-  roam-lynx-find bashrc Pre-filtered fzf search for "bashrc" before entering browser.
+  <script>              Interactive fzf search through all notes (sorted by mtime).
+  <script> bashrc       Pre-filtered fzf search for "bashrc" before entering browser.
 EOF
 }
 
@@ -31,8 +40,8 @@ esac
 
 SEARCH_TERM="$1"
 
-# Base SQL incorporating LEFT JOIN on aliases
-BASE_SQL="SELECT nodes.title, COALESCE(GROUP_CONCAT(aliases.alias, ' | '), '') AS alias_list, nodes.file FROM nodes JOIN files ON nodes.file = files.file LEFT JOIN aliases ON nodes.id = aliases.node_id WHERE nodes.title IS NOT NULL AND nodes.title != '' GROUP BY nodes.id"
+# Columns: 1=title, 2=aliases, 3=file, 4=id (hidden in fzf, used for handoff)
+BASE_SQL="SELECT nodes.title, COALESCE(GROUP_CONCAT(aliases.alias, ' | '), '') AS alias_list, nodes.file, nodes.id FROM nodes JOIN files ON nodes.file = files.file LEFT JOIN aliases ON nodes.id = aliases.node_id WHERE nodes.title IS NOT NULL AND nodes.title != '' GROUP BY nodes.id"
 
 if [[ -z "$SEARCH_TERM" ]]; then
     QUERY="$BASE_SQL ORDER BY files.mtime DESC;"
@@ -52,7 +61,7 @@ if [[ $MATCH_COUNT -eq 0 ]]; then
 elif [[ $MATCH_COUNT -eq 1 ]]; then
     SELECTION="$RESULTS"
 else
-    # Format fzf display: Title + Aliases in col 1/2, live file preview from col 3
+    # fzf shows columns 1-2 only; live file preview comes from column 3
     SELECTION=$(echo "$RESULTS" \
         | fzf --exact \
               --delimiter=$'\t' \
@@ -64,8 +73,8 @@ else
 fi
 
 if [[ -n "$SELECTION" ]]; then
-    NODE_TITLE=$(echo "$SELECTION" | cut -f1)
-    
-    # Hand off execution to the Python terminal browser using the selected title
-    python3 "$PYTHON_NAV_SCRIPT" "$NODE_TITLE"
+    NODE_ID=$(echo "$SELECTION" | cut -f4)
+
+    # Hand off by ID (unambiguous) and pass the DB path so both scripts agree
+    python3 "$PYTHON_NAV_SCRIPT" --db "$DB_PATH" --id "$NODE_ID"
 fi

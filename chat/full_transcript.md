@@ -2209,3 +2209,26 @@ I can write patches for the DB path and node-ID handoff if you'd like, and updat
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_142314_capture.md")
 
 ---
+
+# PROMPT 14
+let's fix the two inconsistencies you have flagged: database path problem and duplicate title problem.  I have renamed the scripts to new names which I like better for some reason: org-roam-lynx-find-starting-node-then-browse-graph.sh and org_roam_lynx_browse_graph.py.  These names are wordy but they add meaning I think.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_160804_capture.md")
+
+---
+
+# RESPONSE 14
+I regenerated the README with all the edits applied.
+
+- **Names:** I used your new script names in the install and usage sections, plus a suggested `roam` alias.
+- **Project name:** I used `org-roam-lynx` in the title and clone URL. Change it if your repo will be called something else.
+- **Configuration:** the new section covers the DB resolution order, `ORG_ROAM_DB`, and `ROAM_LYNX_PY`, with a note for Doom Emacs and custom `org-roam-db-location` setups.
+- **Usage:** it now shows title, `--id`, and `--db` invocations.
+- **Features and limitations:** I mentioned the ID handoff, and removed the old DB-path limitation and the two finished roadmap items.
+- **New limitation:** the fzf list still strips double quotes from displayed titles. The browser shows them correctly because it looks nodes up by ID.
+
+The README still has three placeholders: `YOUR-USERNAME`, the sketch that should become a real screenshot, and the license line.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_160814_capture.md")
+
+---

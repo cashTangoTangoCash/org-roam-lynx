@@ -1943,3 +1943,20 @@ python3 &quot;$PYTHON_NAV_SCRIPT&quot; &quot;$NODE_TITLE&quot;
 <p>I can write patches for the DB path and node-ID handoff if you'd like, and update the README to match.</p>
 <p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_142314_capture.md&quot;)</p>
 <hr />
+<h1>PROMPT 14</h1>
+<p>let's fix the two inconsistencies you have flagged: database path problem and duplicate title problem.  I have renamed the scripts to new names which I like better for some reason: org-roam-lynx-find-starting-node-then-browse-graph.sh and org_roam_lynx_browse_graph.py.  These names are wordy but they add meaning I think.</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_160804_capture.md&quot;)</p>
+<hr />
+<h1>RESPONSE 14</h1>
+<p>I regenerated the README with all the edits applied.</p>
+<ul>
+<li><strong>Names:</strong> I used your new script names in the install and usage sections, plus a suggested <code>roam</code> alias.</li>
+<li><strong>Project name:</strong> I used <code>org-roam-lynx</code> in the title and clone URL. Change it if your repo will be called something else.</li>
+<li><strong>Configuration:</strong> the new section covers the DB resolution order, <code>ORG_ROAM_DB</code>, and <code>ROAM_LYNX_PY</code>, with a note for Doom Emacs and custom <code>org-roam-db-location</code> setups.</li>
+<li><strong>Usage:</strong> it now shows title, <code>--id</code>, and <code>--db</code> invocations.</li>
+<li><strong>Features and limitations:</strong> I mentioned the ID handoff, and removed the old DB-path limitation and the two finished roadmap items.</li>
+<li><strong>New limitation:</strong> the fzf list still strips double quotes from displayed titles. The browser shows them correctly because it looks nodes up by ID.</li>
+</ul>
+<p>The README still has three placeholders: <code>YOUR-USERNAME</code>, the sketch that should become a real screenshot, and the license line.</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_160814_capture.md&quot;)</p>
+<hr />
