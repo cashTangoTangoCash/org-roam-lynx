@@ -1384,3 +1384,98 @@ chmod +x roam-lynx-find
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_121049_capture.md")
 
 ---
+
+# PROMPT 7
+I started this project in Gemini, but Gemini is crashing / not working at this time.  Let's try to continue it so I don't lose my train of thought.  We have a script that roams around the org roam database.  The next step is to add the ability to hit 'e' and visit the current roam node via emacsclient, without exiting/completing the script run.  existing script:
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_130404_capture.md")
+
+---
+
+# RESPONSE 7
+Since `emacsclient -n` returns immediately, you don't need to suspend curses. The script can fire the command and keep running. Here are the changes.
+
+**1. Imports** (top of file):
+
+```python
+import subprocess
+```
+
+**2. Add a status field in `__init__`** (next to the other navigation state):
+
+```python
+    self.status = ""  # Transient message shown in the footer
+```
+
+**3. Add this method to the class** (e.g. after `load_connections`):
+
+```python
+  def visit_in_emacs(self, node):
+    """Open a node in the running Emacs via emacsclient (non-blocking)."""
+    node_id, _, file_path = node
+
+    # org-roam stores ids/files as printed elisp strings, i.e. with quotes
+    node_id = node_id.strip('"')
+    file_path = (file_path or "").strip('"')
+
+    def esc(s):
+      return s.replace("\\", "\\\\").replace('"', '\\"')
+
+    # Visit by ID (lands on the right heading for non-file-level nodes);
+    # fall back to just opening the file if the ID isn't found.
+    elisp = (
+        f'(let ((n (org-roam-node-from-id "{esc(node_id)}")))'
+        f' (if n (org-roam-node-visit n)'
+        f'   (find-file "{esc(file_path)}"))'
+        f' (select-frame-set-input-focus (selected-frame)))'
+    )
+
+    try:
+      result = subprocess.run(
+          ["emacsclient", "-n", "--eval", elisp],
+          capture_output=True,
+          text=True,
+          timeout=5,
+      )
+      if result.returncode == 0:
+        self.status = "Opened in Emacs"
+      else:
+        err = (result.stderr or result.stdout).strip().splitlines()
+        self.status = f"emacsclient failed: {err[0] if err else 'unknown error'}"
+    except FileNotFoundError:
+      self.status = "emacsclient not found in PATH"
+    except subprocess.TimeoutExpired:
+      self.status = "emacsclient timed out"
+```
+
+**4. Replace the footer rendering** so it shows the status message once, then reverts:
+
+```python
+      # --- Render Footer ---
+      footer = (
+          " [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |"
+          " [e]: Emacs | [q]: Quit"
+      )
+      if self.status:
+        footer = f" {self.status}"
+        self.status = ""  # clears on next redraw (i.e. after next keypress)
+      stdscr.addstr(height - 1, 0, footer.ljust(width - 1)[: width - 1], curses.A_REVERSE)
+```
+
+**5. Add the key handler** in the input section (e.g. right after the quit handler):
+
+```python
+      elif key in (ord("e"), ord("E")):
+        self.visit_in_emacs(self.current_node)
+```
+
+A few notes:
+
+- **Requires a running Emacs server** (`M-x server-start`, or `(server-start)` in your init). If it isn't running, you'll see the error in the footer rather than a crash.
+- **Focus:** the `select-frame-set-input-focus` call raises the Emacs frame if it's a GUI frame. If you run Emacs in another terminal, it'll still switch buffers there; you'll just switch windows yourself.
+- **Visiting by ID** uses org-roam's own `org-roam-node-visit`, so it jumps to the exact heading for sub-file nodes, not just the top of the file.
+- **Easy extension:** if you'd rather open the *highlighted* connection instead of the current node, change the call to `self.visit_in_emacs((t["id"], t["title"], t["file"]))` using `t = self.connections[self.selected_idx]`. You could even bind that to `E` and keep `e` for the current node.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_130410_capture.md")
+
+---

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import subprocess
 import curses
 import os
 import sqlite3
@@ -30,7 +31,8 @@ class OrgRoamNavigator:
     self.connections = []  # List of connection dicts
     self.selected_idx = 0
     self.top_idx = 0  # Viewport scroll offset
-
+    self.status = ""  # Transient message shown in the footer
+    
   def find_initial_node(self):
     """Find node matching START_NODE_TITLE or fall back to the first available node."""
     if self.initial_title:
@@ -84,6 +86,43 @@ class OrgRoamNavigator:
       )
 
     return connections
+
+  def visit_in_emacs(self, node):
+    """Open a node in the running Emacs via emacsclient (non-blocking)."""
+    node_id, _, file_path = node
+
+    # org-roam stores ids/files as printed elisp strings, i.e. with quotes
+    node_id = node_id.strip('"')
+    file_path = (file_path or "").strip('"')
+
+    def esc(s):
+      return s.replace("\\", "\\\\").replace('"', '\\"')
+
+    # Visit by ID (lands on the right heading for non-file-level nodes);
+    # fall back to just opening the file if the ID isn't found.
+    elisp = (
+        f'(let ((n (org-roam-node-from-id "{esc(node_id)}")))'
+        f' (if n (org-roam-node-visit n)'
+        f'   (find-file "{esc(file_path)}"))'
+        f' (select-frame-set-input-focus (selected-frame)))'
+    )
+
+    try:
+      result = subprocess.run(
+          ["emacsclient", "-n", "--eval", elisp],
+          capture_output=True,
+          text=True,
+          timeout=5,
+      )
+      if result.returncode == 0:
+        self.status = "Opened in Emacs"
+      else:
+        err = (result.stderr or result.stdout).strip().splitlines()
+        self.status = f"emacsclient failed: {err[0] if err else 'unknown error'}"
+    except FileNotFoundError:
+      self.status = "emacsclient not found in PATH"
+    except subprocess.TimeoutExpired:
+      self.status = "emacsclient timed out"
 
   def run(self, stdscr):
     curses.curs_set(0)
@@ -163,13 +202,14 @@ class OrgRoamNavigator:
             stdscr.addstr(row_y, 2 + len(prefix), conn["title"])
 
       # --- Render Footer ---
-      stdscr.addstr(
-          height - 1,
-          0,
+      footer = (
           " [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |"
-          " [q]: Quit"[: width - 1],
-          curses.A_REVERSE,
+          " [e]: Emacs | [q]: Quit"
       )
+      if self.status:
+        footer = f" {self.status}"
+        self.status = ""  # clears on next redraw (i.e. after next keypress)
+      stdscr.addstr(height - 1, 0, footer.ljust(width - 1)[: width - 1], curses.A_REVERSE)
 
       stdscr.refresh()
 
@@ -179,6 +219,9 @@ class OrgRoamNavigator:
       if key in (ord("q"), ord("Q")):
         break
 
+      elif key in (ord("e"), ord("E")):
+        self.visit_in_emacs(self.current_node)
+    
       # Motion Down (Single Line)
       elif key in (curses.KEY_DOWN, ord("j")):
         if self.connections and self.selected_idx < len(self.connections) - 1:

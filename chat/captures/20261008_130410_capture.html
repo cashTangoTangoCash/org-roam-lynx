@@ -1,0 +1,74 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 7</h1>
+<p><strong><a href="20261008_130404_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>Since <code>emacsclient -n</code> returns immediately, you don't need to suspend curses. The script can fire the command and keep running. Here are the changes.</p>
+<p><strong>1. Imports</strong> (top of file):</p>
+<pre><code class="language-python">import subprocess
+</code></pre>
+<p><strong>2. Add a status field in <code>__init__</code></strong> (next to the other navigation state):</p>
+<pre><code class="language-python">    self.status = &quot;&quot;  # Transient message shown in the footer
+</code></pre>
+<p><strong>3. Add this method to the class</strong> (e.g. after <code>load_connections</code>):</p>
+<pre><code class="language-python">  def visit_in_emacs(self, node):
+    &quot;&quot;&quot;Open a node in the running Emacs via emacsclient (non-blocking).&quot;&quot;&quot;
+    node_id, _, file_path = node
+
+    # org-roam stores ids/files as printed elisp strings, i.e. with quotes
+    node_id = node_id.strip('&quot;')
+    file_path = (file_path or &quot;&quot;).strip('&quot;')
+
+    def esc(s):
+      return s.replace(&quot;\\&quot;, &quot;\\\\&quot;).replace('&quot;', '\\&quot;')
+
+    # Visit by ID (lands on the right heading for non-file-level nodes);
+    # fall back to just opening the file if the ID isn't found.
+    elisp = (
+        f'(let ((n (org-roam-node-from-id &quot;{esc(node_id)}&quot;)))'
+        f' (if n (org-roam-node-visit n)'
+        f'   (find-file &quot;{esc(file_path)}&quot;))'
+        f' (select-frame-set-input-focus (selected-frame)))'
+    )
+
+    try:
+      result = subprocess.run(
+          [&quot;emacsclient&quot;, &quot;-n&quot;, &quot;--eval&quot;, elisp],
+          capture_output=True,
+          text=True,
+          timeout=5,
+      )
+      if result.returncode == 0:
+        self.status = &quot;Opened in Emacs&quot;
+      else:
+        err = (result.stderr or result.stdout).strip().splitlines()
+        self.status = f&quot;emacsclient failed: {err[0] if err else 'unknown error'}&quot;
+    except FileNotFoundError:
+      self.status = &quot;emacsclient not found in PATH&quot;
+    except subprocess.TimeoutExpired:
+      self.status = &quot;emacsclient timed out&quot;
+</code></pre>
+<p><strong>4. Replace the footer rendering</strong> so it shows the status message once, then reverts:</p>
+<pre><code class="language-python">      # --- Render Footer ---
+      footer = (
+          &quot; [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |&quot;
+          &quot; [e]: Emacs | [q]: Quit&quot;
+      )
+      if self.status:
+        footer = f&quot; {self.status}&quot;
+        self.status = &quot;&quot;  # clears on next redraw (i.e. after next keypress)
+      stdscr.addstr(height - 1, 0, footer.ljust(width - 1)[: width - 1], curses.A_REVERSE)
+</code></pre>
+<p><strong>5. Add the key handler</strong> in the input section (e.g. right after the quit handler):</p>
+<pre><code class="language-python">      elif key in (ord(&quot;e&quot;), ord(&quot;E&quot;)):
+        self.visit_in_emacs(self.current_node)
+</code></pre>
+<p>A few notes:</p>
+<ul>
+<li><strong>Requires a running Emacs server</strong> (<code>M-x server-start</code>, or <code>(server-start)</code> in your init). If it isn't running, you'll see the error in the footer rather than a crash.</li>
+<li><strong>Focus:</strong> the <code>select-frame-set-input-focus</code> call raises the Emacs frame if it's a GUI frame. If you run Emacs in another terminal, it'll still switch buffers there; you'll just switch windows yourself.</li>
+<li><strong>Visiting by ID</strong> uses org-roam's own <code>org-roam-node-visit</code>, so it jumps to the exact heading for sub-file nodes, not just the top of the file.</li>
+<li><strong>Easy extension:</strong> if you'd rather open the <em>highlighted</em> connection instead of the current node, change the call to <code>self.visit_in_emacs((t[&quot;id&quot;], t[&quot;title&quot;], t[&quot;file&quot;]))</code> using <code>t = self.connections[self.selected_idx]</code>. You could even bind that to <code>E</code> and keep <code>e</code> for the current node.</li>
+</ul>
+<hr />
+<p><strong><a href="20261008_130404_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_130410_capture.md&quot;)</p>
