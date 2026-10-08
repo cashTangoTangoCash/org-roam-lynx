@@ -1,0 +1,102 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 6</h1>
+<p><strong><a href="20261008_121043_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>We can adapt that exact wrapper pattern to launch our Python <code>roam_lynx.py</code> script instead of <code>emacsclient</code>.</p>
+<p>By querying SQLite for primary titles and aliases, feeding them through <code>fzf</code> (with live node file previewing!), and taking the primary node title directly from field 1, we get an instant front-end selector.</p>
+<hr />
+<h3>Wrapper Script (<code>roam-lynx-find</code>)</h3>
+<p>Save this executable script in your path (e.g., <code>~/.local/bin/roam-lynx-find</code>):</p>
+<pre><code class="language-bash">#!/usr/bin/env bash
+
+# Paths
+DB_PATH=&quot;${XDG_CONFIG_HOME:-$HOME/.config}/emacs/org-roam.db&quot;
+[[ ! -f &quot;$DB_PATH&quot; ]] &amp;&amp; DB_PATH=&quot;$HOME/.emacs.d/org-roam.db&quot;
+PYTHON_NAV_SCRIPT=&quot;${ROAM_LYNX_PY:-$HOME/bin/roam_lynx.py}&quot;
+
+# --- HELP HANDLERS ---
+show_brief_help() {
+    cat &lt;&lt; 'EOF'
+Usage: roam-lynx-find [OPTION] [SEARCH_TERM]
+
+Search Org-roam nodes/aliases using fzf and open the selection in the terminal Lynx-style node browser.
+
+Options:
+  -h, --help            Show this brief command-line help message and exit.
+
+Examples:
+  roam-lynx-find        Interactive fzf search through all notes (sorted by mtime).
+  roam-lynx-find bashrc Pre-filtered fzf search for &quot;bashrc&quot; before entering browser.
+EOF
+}
+
+case &quot;$1&quot; in
+    -h|--help) show_brief_help; exit 0 ;;
+esac
+
+# Validations
+[[ ! -f &quot;$DB_PATH&quot; ]] &amp;&amp; { echo &quot;Error: Database not found at $DB_PATH&quot; &gt;&amp;2; exit 1; }
+[[ ! -f &quot;$PYTHON_NAV_SCRIPT&quot; ]] &amp;&amp; { echo &quot;Error: Python navigator not found at $PYTHON_NAV_SCRIPT&quot; &gt;&amp;2; exit 1; }
+
+SEARCH_TERM=&quot;$1&quot;
+
+# Base SQL incorporating LEFT JOIN on aliases
+BASE_SQL=&quot;SELECT nodes.title, COALESCE(GROUP_CONCAT(aliases.alias, ' | '), '') AS alias_list, nodes.file FROM nodes JOIN files ON nodes.file = files.file LEFT JOIN aliases ON nodes.id = aliases.node_id WHERE nodes.title IS NOT NULL AND nodes.title != '' GROUP BY nodes.id&quot;
+
+if [[ -z &quot;$SEARCH_TERM&quot; ]]; then
+    QUERY=&quot;$BASE_SQL ORDER BY files.mtime DESC;&quot;
+    RESULTS=$(sqlite3 -separator $'\t' &quot;$DB_PATH&quot; &quot;$QUERY&quot; | tr -d '&quot;')
+else
+    SAFE_TERM=&quot;${SEARCH_TERM//\'/\'\'}&quot;
+    # Search both primary title AND alias columns
+    QUERY=&quot;$BASE_SQL HAVING nodes.title LIKE '%$SAFE_TERM%' OR alias_list LIKE '%$SAFE_TERM%' ORDER BY files.mtime DESC;&quot;
+    RESULTS=$(sqlite3 -separator $'\t' &quot;$DB_PATH&quot; &quot;$QUERY&quot; | tr -d '&quot;')
+fi
+
+MATCH_COUNT=$(echo &quot;$RESULTS&quot; | sed '/^$/d' | wc -l)
+
+if [[ $MATCH_COUNT -eq 0 ]]; then
+    echo &quot;No Org-roam nodes or aliases matching: \&quot;$SEARCH_TERM\&quot;&quot; &gt;&amp;2
+    exit 1
+elif [[ $MATCH_COUNT -eq 1 ]]; then
+    SELECTION=&quot;$RESULTS&quot;
+else
+    # Format fzf display: Title + Aliases in col 1/2, live file preview from col 3
+    SELECTION=$(echo &quot;$RESULTS&quot; \
+        | fzf --exact \
+              --delimiter=$'\t' \
+              --with-nth=1,2 \
+              --tiebreak=index \
+              ${SEARCH_TERM:+--query=&quot;$SEARCH_TERM&quot;} \
+              --preview 'head -n 30 {3}' \
+              --preview-window=right:50%:wrap)
+fi
+
+if [[ -n &quot;$SELECTION&quot; ]]; then
+    NODE_TITLE=$(echo &quot;$SELECTION&quot; | cut -f1)
+    
+    # Hand off execution to the Python terminal browser using the selected title
+    python3 &quot;$PYTHON_NAV_SCRIPT&quot; &quot;$NODE_TITLE&quot;
+fi
+
+</code></pre>
+<hr />
+<h3>How to Hook It Together</h3>
+<ol>
+<li><strong>Set script locations:</strong> Ensure <code>PYTHON_NAV_SCRIPT</code> points to where your updated <code>roam_lynx.py</code> lives (e.g., <code>$HOME/bin/roam_lynx.py</code> or export <code>ROAM_LYNX_PY=/path/to/roam_lynx.py</code>).</li>
+<li><strong>Make executable:</strong></li>
+</ol>
+<pre><code class="language-bash">chmod +x roam-lynx-find
+
+</code></pre>
+<ol start="3">
+<li><strong>Usage:</strong></li>
+</ol>
+<ul>
+<li>Run <code>roam-lynx-find</code> to browse all recent notes with live file previewing in <code>fzf</code>.</li>
+<li>Press <code>Enter</code> on a selection, and <code>fzf</code> hands off control seamlessly to <code>roam_lynx.py</code> anchored on that exact node title.</li>
+<li>Run <code>roam-lynx-find term</code> to jump straight into <code>fzf</code> filtered by <code>term</code>.</li>
+</ul>
+<hr />
+<p><strong><a href="20261008_121043_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_121049_capture.md&quot;)</p>
