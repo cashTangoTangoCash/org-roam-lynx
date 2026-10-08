@@ -1863,3 +1863,83 @@ LINK_RE = re.compile(r&quot;\[\[[^\]]*\]\[([^\]]*)\]\]|\[\[([^\]]*)\]\]&quot;)
 </ul>
 <p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_141009_capture.md&quot;)</p>
 <hr />
+<h1>PROMPT 13</h1>
+<p>this complete project consists of the python script as well as this front-end shell script:</p>
+<p>#!/usr/bin/env bash</p>
+<h1>Paths</h1>
+<p>DB_PATH=&quot;${XDG_CONFIG_HOME:-$HOME/.config}/emacs/org-roam.db&quot;
+[[ ! -f &quot;$DB_PATH&quot; ]] &amp;&amp; DB_PATH=&quot;$HOME/.emacs.d/org-roam.db&quot;
+PYTHON_NAV_SCRIPT=&quot;${ROAM_LYNX_PY:-$HOME/.local/bin/roam_lynx.py}&quot;</p>
+<h1>--- HELP HANDLERS ---</h1>
+<p>show_brief_help() {
+cat &lt;&lt; 'EOF'
+Usage: roam-lynx-find [OPTION] [SEARCH_TERM]</p>
+<p>Search Org-roam nodes/aliases using fzf and open the selection in the terminal Lynx-style node browser.</p>
+<p>Options:
+-h, --help            Show this brief command-line help message and exit.</p>
+<p>Examples:
+roam-lynx-find        Interactive fzf search through all notes (sorted by mtime).
+roam-lynx-find bashrc Pre-filtered fzf search for &quot;bashrc&quot; before entering browser.
+EOF
+}</p>
+<p>case &quot;$1&quot; in
+-h|--help) show_brief_help; exit 0 ;;
+esac</p>
+<h1>Validations</h1>
+<p>[[ ! -f &quot;$DB_PATH&quot; ]] &amp;&amp; { echo &quot;Error: Database not found at $DB_PATH&quot; &gt;&amp;2; exit 1; }
+[[ ! -f &quot;$PYTHON_NAV_SCRIPT&quot; ]] &amp;&amp; { echo &quot;Error: Python navigator not found at $PYTHON_NAV_SCRIPT&quot; &gt;&amp;2; exit 1; }</p>
+<p>SEARCH_TERM=&quot;$1&quot;</p>
+<h1>Base SQL incorporating LEFT JOIN on aliases</h1>
+<p>BASE_SQL=&quot;SELECT nodes.title, COALESCE(GROUP_CONCAT(aliases.alias, ' | '), '') AS alias_list, nodes.file FROM nodes JOIN files ON nodes.file = files.file LEFT JOIN aliases ON nodes.id = aliases.node_id WHERE nodes.title IS NOT NULL AND nodes.title != '' GROUP BY nodes.id&quot;</p>
+<p>if [[ -z &quot;$SEARCH_TERM&quot; ]]; then
+QUERY=&quot;$BASE_SQL ORDER BY files.mtime DESC;&quot;
+RESULTS=$(sqlite3 -separator $'\t' &quot;$DB_PATH&quot; &quot;$QUERY&quot; | tr -d '&quot;')
+else
+SAFE_TERM=&quot;${SEARCH_TERM//'/''}&quot;
+# Search both primary title AND alias columns
+QUERY=&quot;$BASE_SQL HAVING nodes.title LIKE '%$SAFE_TERM%' OR alias_list LIKE '%$SAFE_TERM%' ORDER BY files.mtime DESC;&quot;
+RESULTS=$(sqlite3 -separator $'\t' &quot;$DB_PATH&quot; &quot;$QUERY&quot; | tr -d '&quot;')
+fi</p>
+<p>MATCH_COUNT=$(echo &quot;$RESULTS&quot; | sed '/^$/d' | wc -l)</p>
+<p>if [[ $MATCH_COUNT -eq 0 ]]; then
+echo &quot;No Org-roam nodes or aliases matching: &quot;$SEARCH_TERM&quot;&quot; &gt;&amp;2
+exit 1
+elif [[ $MATCH_COUNT -eq 1 ]]; then
+SELECTION=&quot;$RESULTS&quot;
+else
+# Format fzf display: Title + Aliases in col 1/2, live file preview from col 3
+SELECTION=$(echo &quot;$RESULTS&quot; <br />
+| fzf --exact <br />
+--delimiter=$'\t' <br />
+--with-nth=1,2 <br />
+--tiebreak=index <br />
+${SEARCH_TERM:+--query=&quot;$SEARCH_TERM&quot;} <br />
+--preview 'head -n 30 {3}' <br />
+--preview-window=right:50%:wrap)
+fi</p>
+<p>if [[ -n &quot;$SELECTION&quot; ]]; then
+NODE_TITLE=$(echo &quot;$SELECTION&quot; | cut -f1)</p>
+<pre><code># Hand off execution to the Python terminal browser using the selected title
+python3 &quot;$PYTHON_NAV_SCRIPT&quot; &quot;$NODE_TITLE&quot;
+</code></pre>
+<p>fi</p>
+<p>I would like to put it on github along with my other similar stuff.  it needs a README.md.  let's try to make it attractive to a non-expert (mid-level?) emacs user who likes org-roam and maybe has played with org-roam-ui.  the intention of the project is to arrive at something that runs faster than org-roam-ui.  I like midnight commander and it's lynx-like motion mode for exploring the file system.  I was trying to aim at an org roam node explorer which allows you to rapidly move around your node network in a similar way.</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_142310_capture.md&quot;)</p>
+<hr />
+<h1>RESPONSE 13</h1>
+<p>I wrote the README, but a few things need your attention before you publish.</p>
+<p><strong>Placeholders to fill in</strong></p>
+<ul>
+<li><code>YOUR-USERNAME</code> in the clone URL.</li>
+<li>The sketch of the UI is hand-written. A real screenshot or an asciinema recording would sell the project better.</li>
+<li>The License section is a reminder to pick one and add a <code>LICENSE</code> file.</li>
+</ul>
+<p><strong>Two inconsistencies in the code that the README currently documents as limitations</strong></p>
+<ul>
+<li><strong>Database path:</strong> the shell script checks <code>~/.config/emacs/org-roam.db</code> first and falls back to <code>~/.emacs.d/org-roam.db</code>, but <code>roam_lynx.py</code> hardcodes the latter. For someone on a Doom or XDG layout, fzf would find their nodes and then the Python script would fail. I'd fix this soon, either by passing the path from the shell script (<code>ORG_ROAM_DB=$DB_PATH python3 ...</code>) and reading <code>os.environ</code> in Python, or with a <code>--db</code> option. Then the limitation and the roadmap item can be removed.</li>
+<li><strong>Duplicate titles:</strong> the shell script hands over only the title, and Python starts at the first node whose title matches <code>LIKE '%...%'</code>. If two nodes share a title, or one title contains another, you may land on the wrong node. Passing the node ID instead would fix this. The fzf query would need to select <code>nodes.id</code> as a hidden fourth column.</li>
+</ul>
+<p><strong>A claim I deliberately didn't make:</strong> the README says the tool is lightweight and doesn't need a browser or server, but it doesn't claim specific speedups over org-roam-ui, since there are no benchmarks. If you time both on a large database, a line with real numbers would be a strong addition.</p>
+<p>I can write patches for the DB path and node-ID handoff if you'd like, and update the README to match.</p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_142314_capture.md&quot;)</p>
+<hr />

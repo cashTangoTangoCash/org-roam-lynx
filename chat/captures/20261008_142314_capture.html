@@ -1,0 +1,21 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 13</h1>
+<p><strong><a href="20261008_142310_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>I wrote the README, but a few things need your attention before you publish.</p>
+<p><strong>Placeholders to fill in</strong></p>
+<ul>
+<li><code>YOUR-USERNAME</code> in the clone URL.</li>
+<li>The sketch of the UI is hand-written. A real screenshot or an asciinema recording would sell the project better.</li>
+<li>The License section is a reminder to pick one and add a <code>LICENSE</code> file.</li>
+</ul>
+<p><strong>Two inconsistencies in the code that the README currently documents as limitations</strong></p>
+<ul>
+<li><strong>Database path:</strong> the shell script checks <code>~/.config/emacs/org-roam.db</code> first and falls back to <code>~/.emacs.d/org-roam.db</code>, but <code>roam_lynx.py</code> hardcodes the latter. For someone on a Doom or XDG layout, fzf would find their nodes and then the Python script would fail. I'd fix this soon, either by passing the path from the shell script (<code>ORG_ROAM_DB=$DB_PATH python3 ...</code>) and reading <code>os.environ</code> in Python, or with a <code>--db</code> option. Then the limitation and the roadmap item can be removed.</li>
+<li><strong>Duplicate titles:</strong> the shell script hands over only the title, and Python starts at the first node whose title matches <code>LIKE '%...%'</code>. If two nodes share a title, or one title contains another, you may land on the wrong node. Passing the node ID instead would fix this. The fzf query would need to select <code>nodes.id</code> as a hidden fourth column.</li>
+</ul>
+<p><strong>A claim I deliberately didn't make:</strong> the README says the tool is lightweight and doesn't need a browser or server, but it doesn't claim specific speedups over org-roam-ui, since there are no benchmarks. If you time both on a large database, a line with real numbers would be a strong addition.</p>
+<p>I can write patches for the DB path and node-ID handoff if you'd like, and update the README to match.</p>
+<hr />
+<p><strong><a href="20261008_142310_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_142314_capture.md&quot;)</p>

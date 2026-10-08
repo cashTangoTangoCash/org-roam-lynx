@@ -2107,3 +2107,105 @@ Notes:
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_141009_capture.md")
 
 ---
+
+# PROMPT 13
+this complete project consists of the python script as well as this front-end shell script:
+
+#!/usr/bin/env bash
+
+# Paths
+DB_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/emacs/org-roam.db"
+[[ ! -f "$DB_PATH" ]] && DB_PATH="$HOME/.emacs.d/org-roam.db"
+PYTHON_NAV_SCRIPT="${ROAM_LYNX_PY:-$HOME/.local/bin/roam_lynx.py}"
+
+# --- HELP HANDLERS ---
+show_brief_help() {
+    cat << 'EOF'
+Usage: roam-lynx-find [OPTION] [SEARCH_TERM]
+
+Search Org-roam nodes/aliases using fzf and open the selection in the terminal Lynx-style node browser.
+
+Options:
+  -h, --help            Show this brief command-line help message and exit.
+
+Examples:
+  roam-lynx-find        Interactive fzf search through all notes (sorted by mtime).
+  roam-lynx-find bashrc Pre-filtered fzf search for "bashrc" before entering browser.
+EOF
+}
+
+case "$1" in
+    -h|--help) show_brief_help; exit 0 ;;
+esac
+
+# Validations
+[[ ! -f "$DB_PATH" ]] && { echo "Error: Database not found at $DB_PATH" >&2; exit 1; }
+[[ ! -f "$PYTHON_NAV_SCRIPT" ]] && { echo "Error: Python navigator not found at $PYTHON_NAV_SCRIPT" >&2; exit 1; }
+
+SEARCH_TERM="$1"
+
+# Base SQL incorporating LEFT JOIN on aliases
+BASE_SQL="SELECT nodes.title, COALESCE(GROUP_CONCAT(aliases.alias, ' | '), '') AS alias_list, nodes.file FROM nodes JOIN files ON nodes.file = files.file LEFT JOIN aliases ON nodes.id = aliases.node_id WHERE nodes.title IS NOT NULL AND nodes.title != '' GROUP BY nodes.id"
+
+if [[ -z "$SEARCH_TERM" ]]; then
+    QUERY="$BASE_SQL ORDER BY files.mtime DESC;"
+    RESULTS=$(sqlite3 -separator $'\t' "$DB_PATH" "$QUERY" | tr -d '"')
+else
+    SAFE_TERM="${SEARCH_TERM//\'/\'\'}"
+    # Search both primary title AND alias columns
+    QUERY="$BASE_SQL HAVING nodes.title LIKE '%$SAFE_TERM%' OR alias_list LIKE '%$SAFE_TERM%' ORDER BY files.mtime DESC;"
+    RESULTS=$(sqlite3 -separator $'\t' "$DB_PATH" "$QUERY" | tr -d '"')
+fi
+
+MATCH_COUNT=$(echo "$RESULTS" | sed '/^$/d' | wc -l)
+
+if [[ $MATCH_COUNT -eq 0 ]]; then
+    echo "No Org-roam nodes or aliases matching: \"$SEARCH_TERM\"" >&2
+    exit 1
+elif [[ $MATCH_COUNT -eq 1 ]]; then
+    SELECTION="$RESULTS"
+else
+    # Format fzf display: Title + Aliases in col 1/2, live file preview from col 3
+    SELECTION=$(echo "$RESULTS" \
+        | fzf --exact \
+              --delimiter=$'\t' \
+              --with-nth=1,2 \
+              --tiebreak=index \
+              ${SEARCH_TERM:+--query="$SEARCH_TERM"} \
+              --preview 'head -n 30 {3}' \
+              --preview-window=right:50%:wrap)
+fi
+
+if [[ -n "$SELECTION" ]]; then
+    NODE_TITLE=$(echo "$SELECTION" | cut -f1)
+    
+    # Hand off execution to the Python terminal browser using the selected title
+    python3 "$PYTHON_NAV_SCRIPT" "$NODE_TITLE"
+fi
+
+
+I would like to put it on github along with my other similar stuff.  it needs a README.md.  let's try to make it attractive to a non-expert (mid-level?) emacs user who likes org-roam and maybe has played with org-roam-ui.  the intention of the project is to arrive at something that runs faster than org-roam-ui.  I like midnight commander and it's lynx-like motion mode for exploring the file system.  I was trying to aim at an org roam node explorer which allows you to rapidly move around your node network in a similar way.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_142310_capture.md")
+
+---
+
+# RESPONSE 13
+I wrote the README, but a few things need your attention before you publish.
+
+**Placeholders to fill in**
+- `YOUR-USERNAME` in the clone URL.
+- The sketch of the UI is hand-written. A real screenshot or an asciinema recording would sell the project better.
+- The License section is a reminder to pick one and add a `LICENSE` file.
+
+**Two inconsistencies in the code that the README currently documents as limitations**
+- **Database path:** the shell script checks `~/.config/emacs/org-roam.db` first and falls back to `~/.emacs.d/org-roam.db`, but `roam_lynx.py` hardcodes the latter. For someone on a Doom or XDG layout, fzf would find their nodes and then the Python script would fail. I'd fix this soon, either by passing the path from the shell script (`ORG_ROAM_DB=$DB_PATH python3 ...`) and reading `os.environ` in Python, or with a `--db` option. Then the limitation and the roadmap item can be removed.
+- **Duplicate titles:** the shell script hands over only the title, and Python starts at the first node whose title matches `LIKE '%...%'`. If two nodes share a title, or one title contains another, you may land on the wrong node. Passing the node ID instead would fix this. The fzf query would need to select `nodes.id` as a hidden fourth column.
+
+**A claim I deliberately didn't make:** the README says the tool is lightweight and doesn't need a browser or server, but it doesn't claim specific speedups over org-roam-ui, since there are no benchmarks. If you time both on a large database, a line with real numbers would be a strong addition.
+
+I can write patches for the DB path and node-ID handoff if you'd like, and update the README to match.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_142314_capture.md")
+
+---
