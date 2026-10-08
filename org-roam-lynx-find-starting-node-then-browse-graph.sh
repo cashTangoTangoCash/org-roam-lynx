@@ -3,7 +3,7 @@
 # Paths
 DB_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/emacs/org-roam.db"
 [[ ! -f "$DB_PATH" ]] && DB_PATH="$HOME/.emacs.d/org-roam.db"
-PYTHON_NAV_SCRIPT="${ROAM_LYNX_PY:-$HOME/bin/roam_lynx.py}"
+PYTHON_NAV_SCRIPT="${ROAM_LYNX_PY:-$HOME/.local/bin/org_roam_lynx_browse_graph.py}"
 
 # --- HELP HANDLERS ---
 show_brief_help() {
