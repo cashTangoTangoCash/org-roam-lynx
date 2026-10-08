@@ -1,0 +1,34 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 11</h1>
+<p><strong><a href="20261008_140948_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261008_140956_capture.html">Next →</a></strong></p>
+<hr />
+<p>I'd add one, but keep it much simpler than what Gemini was heading toward. Your use case (&quot;is this node a stub?&quot;) doesn't need a faithful rendering of Org. It needs a quick sense of size and substance.</p>
+<p><strong>What pandoc does here</strong></p>
+<p>Pandoc converts between markup formats. For this, it would read the Org file and emit something else (plain text, markdown, ANSI-colored text). It would give you cleaner prose, with <code>#+TITLE:</code> lines and property drawers stripped and links rendered as text.</p>
+<p><strong>Would it slow things down?</strong></p>
+<p>It would be a subprocess launch per preview, typically 20 to 100 ms, more for big files. That's tolerable if you only preview on demand, but noticeable if it runs on every <code>j</code>/<code>k</code>. And it doesn't solve your actual complaint: pandoc turns Org into flattened text, with no folding. So you'd pay the latency and still not get the Emacs-like look. I'd skip pandoc.</p>
+<p><strong>Why a basic preview feels wrong, and a cheap fix</strong></p>
+<p>Raw Org looks like a text file because it is one. But you can fake the useful parts of Org's visual style in a few lines of Python, with no external tools:</p>
+<ul>
+<li>Hide the noise: skip <code>:PROPERTIES:</code> ... <code>:END:</code> drawers and <code>#+</code> keyword lines (or show just the title).</li>
+<li>Color headings by level and dim everything else, using the curses color pairs you already have.</li>
+<li>Collapse long bodies: show the first N lines of body text under each heading, as a rough stand-in for folding.</li>
+<li>Show a stub indicator: a header line like <code>42 words, 3 headings, 2 links</code> is arguably more useful than the text itself for your stub-spotting purpose.</li>
+</ul>
+<p><strong>Making it responsive</strong></p>
+<p>The existing script is snappy because it only runs small SQLite queries. To keep that:</p>
+<ul>
+<li>Read only the first ~50 lines of the file (<code>itertools.islice</code>), not the whole thing.</li>
+<li>Cache previews in a dict keyed by <code>(file, mtime)</code>, so revisiting is free and edits invalidate automatically.</li>
+<li>Optionally, render lazily: draw the list immediately and fill the preview on the next loop iteration, or only when the selection has rested for a moment. In practice, reading 50 lines is fast enough that this is unnecessary.</li>
+</ul>
+<p><strong>One wrinkle: file-level vs. heading-level nodes</strong></p>
+<p>org-roam nodes can be a whole file or a single heading inside a file. The <code>nodes</code> table has a <code>level</code> and <code>pos</code> column, so for heading nodes you'd want to start reading at <code>pos</code> (a character offset) instead of the top of the file, and stop at the next heading of the same or higher level. Otherwise the preview shows the wrong content. This is the main thing that makes a &quot;basic&quot; preview more work than it looks.</p>
+<p><strong>Layout</strong></p>
+<p>A bottom pane (list on top, preview below, split roughly 50/50, or toggled with <code>p</code>) works better than a side pane on typical terminals, since titles and Org prose are wide. A toggle key also means you can hide it when you just want to fly through the graph.</p>
+<p><strong>My recommendation</strong></p>
+<p>Start with the stats line plus a lightly styled, truncated body, and toggle it with <code>p</code>. If you find yourself wanting true Org rendering, the better route is asking Emacs itself, since you already have <code>emacsclient</code> wired up. But that costs a round trip per preview, and Emacs would have to be running, so I'd treat it as a later experiment rather than the first move.</p>
+<p>Want me to write the patch? If so, one question: should it preview the highlighted connection, the current node, or both (current node in the header area, highlighted connection in the pane)? I'd lean toward the highlighted connection, since that's the &quot;should I jump there?&quot; decision.</p>
+<hr />
+<p><strong><a href="20261008_140948_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261008_140956_capture.html">Next →</a></strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_140954_capture.md&quot;)</p>

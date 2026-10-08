@@ -1,0 +1,225 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 12</h1>
+<p><strong><a href="20261008_140956_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>Same format as before. It assumes the <code>e</code>, <code>r</code>, and error-handling patches are applied, since it uses <code>_query</code>, <code>db_ok</code>, and <code>status</code>. The pane shows the highlighted connection, toggles with <code>p</code>, and is on by default.</p>
+<p><strong>1. Imports</strong> (top of file):</p>
+<pre><code class="language-python">import re
+</code></pre>
+<p><strong>2. Constants</strong> (after <code>START_NODE_TITLE</code>):</p>
+<pre><code class="language-python">PREVIEW_MIN_HEIGHT = 16    # hide the pane on very short terminals
+MAX_READ_CHARS = 200_000   # cap on how much of a file we read
+MAX_BODY_LINES = 4         # body lines shown per heading (poor man's folding)
+STUB_WORDS = 40            # fewer words than this gets flagged as a stub
+HEADING_PAIRS = (4, 5, 6, 3)  # curses color pairs for heading levels 1-4+
+
+HEADING_RE = re.compile(r&quot;^(\*+)\s+(.*)&quot;)
+DRAWER_START_RE = re.compile(r&quot;^\s*:[A-Za-z_-]+:\s*$&quot;)
+DRAWER_END_RE = re.compile(r&quot;^\s*:END:\s*$&quot;, re.IGNORECASE)
+LINK_RE = re.compile(r&quot;\[\[[^\]]*\]\[([^\]]*)\]\]|\[\[([^\]]*)\]\]&quot;)
+</code></pre>
+<p><strong>3. State in <code>__init__</code></strong> (next to the other navigation state):</p>
+<pre><code class="language-python">    self.show_preview = True  # set False to start with the pane hidden
+    self.preview_cache: dict = {}  # (node_id, file mtime_ns) -&gt; preview
+</code></pre>
+<p><strong>4. Extra heading colors</strong> (in <code>run</code>, after the existing <code>init_pair</code> calls):</p>
+<pre><code class="language-python">    curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # Heading level 2
+    curses.init_pair(6, curses.COLOR_CYAN, -1)  # Heading level 3
+</code></pre>
+<p><strong>5. Add these methods to the class</strong> (e.g. after <code>lookup_node</code>):</p>
+<pre><code class="language-python">  @staticmethod
+  def _strip_links(s):
+    &quot;&quot;&quot;[[id:x][Desc]] -&gt; Desc, [[target]] -&gt; target.&quot;&quot;&quot;
+    return LINK_RE.sub(lambda m: m.group(1) or m.group(2) or &quot;&quot;, s)
+
+  def _count(self, sql, node_id):
+    rows = self._query(sql, (node_id,))
+    return rows[0][0] if rows else &quot;?&quot;
+
+  def _summarize_org(self, text, level):
+    &quot;&quot;&quot;Return (word_count, subheading_count, styled_lines) for a node's text.
+
+    styled_lines is a list of (text, kind, heading_level) tuples.
+    &quot;&quot;&quot;
+    lines = text.splitlines()
+    if level:
+      # Heading node: stop at the next heading of the same or higher level
+      for i, line in enumerate(lines[1:], 1):
+        m = HEADING_RE.match(line)
+        if m and len(m.group(1)) &lt;= level:
+          lines = lines[:i]
+          break
+
+    out = []
+    words = 0
+    subheads = 0
+    in_drawer = False
+    shown = 0   # body lines shown under the current heading
+    hidden = 0  # body lines collapsed under the current heading
+
+    def flush_hidden():
+      nonlocal hidden
+      if hidden:
+        plural = &quot;s&quot; if hidden != 1 else &quot;&quot;
+        out.append((f&quot;  … {hidden} more line{plural}&quot;, &quot;dim&quot;, 0))
+        hidden = 0
+
+    for i, line in enumerate(lines):
+      if in_drawer:
+        if DRAWER_END_RE.match(line):
+          in_drawer = False
+        continue
+      if DRAWER_START_RE.match(line):
+        in_drawer = True
+        continue
+      if line.lstrip().startswith(&quot;#+&quot;):
+        continue
+
+      m = HEADING_RE.match(line)
+      if m:
+        flush_hidden()
+        shown = 0
+        if not (i == 0 and level):  # don't count the node's own heading
+          subheads += 1
+        words += len(m.group(2).split())
+        out.append((self._strip_links(line.rstrip()), &quot;heading&quot;, len(m.group(1))))
+        continue
+
+      body = self._strip_links(line).strip()
+      if not body:
+        continue
+      words += len(body.split())
+      if shown &lt; MAX_BODY_LINES:
+        out.append((&quot;  &quot; + body, &quot;body&quot;, 0))
+        shown += 1
+      else:
+        hidden += 1
+
+    flush_hidden()
+    return words, subheads, out
+
+  def get_preview(self, conn):
+    &quot;&quot;&quot;Build (or fetch from cache) the preview for a connection dict.&quot;&quot;&quot;
+    node_id = conn[&quot;id&quot;]
+    rows = self._query(
+        &quot;SELECT file, level, pos FROM nodes WHERE id = ?;&quot;, (node_id,)
+    )
+    if not rows:
+      return {&quot;stats&quot;: &quot;Node not found in database&quot;, &quot;lines&quot;: []}
+
+    file_path, level, pos = rows[0]
+    file_path = (file_path or &quot;&quot;).strip('&quot;')
+    try:
+      mtime = os.stat(file_path).st_mtime_ns
+    except OSError:
+      return {&quot;stats&quot;: &quot;File not found&quot;, &quot;lines&quot;: [(file_path, &quot;dim&quot;, 0)]}
+
+    key = (node_id, mtime)
+    cached = self.preview_cache.get(key)
+    if cached:
+      return cached
+
+    try:
+      with open(file_path, encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;) as f:
+        text = f.read(MAX_READ_CHARS)
+    except OSError as e:
+      return {&quot;stats&quot;: f&quot;Cannot read file: {e.strerror}&quot;, &quot;lines&quot;: []}
+
+    # Heading-level nodes: pos is a 1-based character offset into the file
+    if level and pos:
+      text = text[pos - 1 :]
+
+    words, subheads, lines = self._summarize_org(text, level)
+    n_out = self._count(
+        &quot;SELECT COUNT(*) FROM links WHERE source = ? AND type = '\&quot;id\&quot;';&quot;,
+        node_id,
+    )
+    n_in = self._count(
+        &quot;SELECT COUNT(*) FROM links WHERE dest = ? AND type = '\&quot;id\&quot;';&quot;,
+        node_id,
+    )
+
+    kind = f&quot;heading (level {level})&quot; if level else &quot;file&quot;
+    stats = (
+        f&quot;{kind} · {words} words · {subheads} subheadings&quot;
+        f&quot; · {n_out} out / {n_in} in&quot;
+    )
+    if words &lt; STUB_WORDS:
+      stats += &quot; · looks like a stub&quot;
+
+    result = {&quot;stats&quot;: stats, &quot;lines&quot;: lines}
+    if self.db_ok:  # don't cache a result built from a failed query
+      if len(self.preview_cache) &gt; 500:
+        self.preview_cache.clear()
+      self.preview_cache[key] = result
+    return result
+
+  def draw_preview(self, stdscr, top, rows, width):
+    &quot;&quot;&quot;Draw the preview pane into screen rows [top, top + rows).&quot;&quot;&quot;
+
+    def put(y, text, attr=0):
+      try:
+        stdscr.addstr(y, 2, text[: width - 4], attr)
+      except curses.error:
+        pass
+
+    try:
+      stdscr.addstr(top, 0, &quot;─&quot; * (width - 1))
+    except curses.error:
+      pass
+
+    if not self.connections:
+      return
+    preview = self.get_preview(self.connections[self.selected_idx])
+    put(top + 1, preview[&quot;stats&quot;], curses.A_BOLD)
+
+    body_rows = rows - 2
+    lines = preview[&quot;lines&quot;] or [(&quot;(no body text)&quot;, &quot;dim&quot;, 0)]
+    truncated = len(lines) &gt; body_rows
+    for i, (text, kind, lvl) in enumerate(lines[:body_rows]):
+      if truncated and i == body_rows - 1:
+        text, kind, lvl = &quot;  …&quot;, &quot;dim&quot;, 0
+      if kind == &quot;heading&quot;:
+        pair = HEADING_PAIRS[min(lvl, len(HEADING_PAIRS)) - 1]
+        attr = curses.color_pair(pair) | curses.A_BOLD
+      elif kind == &quot;dim&quot;:
+        attr = curses.A_DIM
+      else:
+        attr = 0
+      put(top + 2 + i, text, attr)
+</code></pre>
+<p><strong>6. Shrink the list when the pane is showing</strong> (in <code>run</code>, replacing <code>max_items = max(1, height - 6)</code>):</p>
+<pre><code class="language-python">      preview_rows = 0
+      if self.show_preview and height &gt;= PREVIEW_MIN_HEIGHT:
+        preview_rows = (height - 6) // 2
+      max_items = max(1, height - 6 - preview_rows)
+</code></pre>
+<p><strong>7. Draw the pane</strong> (in <code>run</code>, right after the &quot;Render Connections&quot; block and before &quot;Render Footer&quot;):</p>
+<pre><code class="language-python">      if preview_rows:
+        self.draw_preview(stdscr, height - 1 - preview_rows, preview_rows, width)
+</code></pre>
+<p><strong>8. Key handler</strong> (in the input section):</p>
+<pre><code class="language-python">      elif key in (ord(&quot;p&quot;), ord(&quot;P&quot;)):
+        self.show_preview = not self.show_preview
+</code></pre>
+<p><strong>9. Clear the cache on refresh</strong> (in <code>refresh</code>, right after the <code>current_node is None</code> guard):</p>
+<pre><code class="language-python">    self.preview_cache.clear()
+</code></pre>
+<p><strong>10. Footer.</strong> It's getting long and will truncate at 80 columns, so here's a compact version:</p>
+<pre><code class="language-python">      footer = (
+          &quot; j/k:Move  l:Jump  h:Back  r:Refresh  e:Emacs  p:Preview  q:Quit&quot;
+      )
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li><strong>Read-the-whole-file correction:</strong> I earlier suggested reading only the first ~50 lines, but the word count and stub detection need the whole node. Files are read once per <code>(node, mtime)</code> and cached, and capped at 200K characters, so <code>j</code>/<code>k</code> stays instant. Revisiting a node or scrolling back costs nothing.</li>
+<li><strong>What the stats mean:</strong> &quot;out&quot; is the number of ID links in that node, and &quot;in&quot; is the number of ID links pointing at it. These are the same links your connection list uses, so plain URLs aren't counted.</li>
+<li><strong>Cache staleness:</strong> the cache invalidates when the highlighted node's file changes. A new backlink added from a different file won't change that mtime, so press <code>r</code> to refresh those counts.</li>
+<li><strong>Stub threshold:</strong> <code>STUB_WORDS = 40</code> counts heading text too. Adjust it to taste. Any node under the threshold gets &quot;looks like a stub&quot; in the stats line.</li>
+<li><strong>Folding stand-in:</strong> each heading shows its first 4 body lines, then <code>… N more lines</code>. Property drawers and <code>#+</code> keyword lines are hidden, and <code>[[id:...][Desc]]</code> links are shown as just <code>Desc</code>. Heading stars are kept so you can see the depth.</li>
+<li><strong>Heading-node offsets:</strong> <code>pos</code> is Emacs's character offset. It's exact for normal UTF-8 files with LF line endings, but CRLF files could land a few characters off.</li>
+<li><strong>Short terminals:</strong> below 16 rows the pane hides itself automatically, so the list never gets squeezed to nothing.</li>
+</ul>
+<hr />
+<p><strong><a href="20261008_140956_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_141009_capture.md&quot;)</p>

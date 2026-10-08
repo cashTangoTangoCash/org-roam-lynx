@@ -5,13 +5,23 @@ import os
 import sqlite3
 import sys
 import time
+import re
 
 # ----------------------------------------------------------------------
 # Configuration / Hardcoded Defaults
 # ----------------------------------------------------------------------
 DEFAULT_DB = os.path.expanduser("~/.emacs.d/org-roam.db")
 START_NODE_TITLE = "a bike accident and injury"
+PREVIEW_MIN_HEIGHT = 16    # hide the pane on very short terminals
+MAX_READ_CHARS = 200_000   # cap on how much of a file we read
+MAX_BODY_LINES = 4         # body lines shown per heading (poor man's folding)
+STUB_WORDS = 40            # fewer words than this gets flagged as a stub
+HEADING_PAIRS = (4, 5, 6, 3)  # curses color pairs for heading levels 1-4+
 
+HEADING_RE = re.compile(r"^(\*+)\s+(.*)")
+DRAWER_START_RE = re.compile(r"^\s*:[A-Za-z_-]+:\s*$")
+DRAWER_END_RE = re.compile(r"^\s*:END:\s*$", re.IGNORECASE)
+LINK_RE = re.compile(r"\[\[[^\]]*\]\[([^\]]*)\]\]|\[\[([^\]]*)\]\]")
 
 class OrgRoamNavigator:
 
@@ -34,6 +44,8 @@ class OrgRoamNavigator:
     self.db_ok = True  # False if the most recent query failed
     self.current_node: tuple[str, str, str] = self.find_initial_node()
     self.connections = self.load_connections(self.current_node[0])
+    self.show_preview = True  # set False to start with the pane hidden
+    self.preview_cache: dict = {}  # (node_id, file mtime_ns) -> preview
     
   def find_initial_node(self):
     """Find node matching START_NODE_TITLE or fall back to the first available node."""
@@ -86,6 +98,167 @@ class OrgRoamNavigator:
       return None
     row = rows[0]
     return (row[0], self._clean(row[1]), row[2])
+
+  @staticmethod
+  def _strip_links(s):
+    """[[id:x][Desc]] -> Desc, [[target]] -> target."""
+    return LINK_RE.sub(lambda m: m.group(1) or m.group(2) or "", s)
+
+  def _count(self, sql, node_id):
+    rows = self._query(sql, (node_id,))
+    return rows[0][0] if rows else "?"
+
+  def _summarize_org(self, text, level):
+    """Return (word_count, subheading_count, styled_lines) for a node's text.
+
+    styled_lines is a list of (text, kind, heading_level) tuples.
+    """
+    lines = text.splitlines()
+    if level:
+      # Heading node: stop at the next heading of the same or higher level
+      for i, line in enumerate(lines[1:], 1):
+        m = HEADING_RE.match(line)
+        if m and len(m.group(1)) <= level:
+          lines = lines[:i]
+          break
+
+    out = []
+    words = 0
+    subheads = 0
+    in_drawer = False
+    shown = 0   # body lines shown under the current heading
+    hidden = 0  # body lines collapsed under the current heading
+
+    def flush_hidden():
+      nonlocal hidden
+      if hidden:
+        plural = "s" if hidden != 1 else ""
+        out.append((f"  … {hidden} more line{plural}", "dim", 0))
+        hidden = 0
+
+    for i, line in enumerate(lines):
+      if in_drawer:
+        if DRAWER_END_RE.match(line):
+          in_drawer = False
+        continue
+      if DRAWER_START_RE.match(line):
+        in_drawer = True
+        continue
+      if line.lstrip().startswith("#+"):
+        continue
+
+      m = HEADING_RE.match(line)
+      if m:
+        flush_hidden()
+        shown = 0
+        if not (i == 0 and level):  # don't count the node's own heading
+          subheads += 1
+        words += len(m.group(2).split())
+        out.append((self._strip_links(line.rstrip()), "heading", len(m.group(1))))
+        continue
+
+      body = self._strip_links(line).strip()
+      if not body:
+        continue
+      words += len(body.split())
+      if shown < MAX_BODY_LINES:
+        out.append(("  " + body, "body", 0))
+        shown += 1
+      else:
+        hidden += 1
+
+    flush_hidden()
+    return words, subheads, out
+
+  def get_preview(self, conn):
+    """Build (or fetch from cache) the preview for a connection dict."""
+    node_id = conn["id"]
+    rows = self._query(
+        "SELECT file, level, pos FROM nodes WHERE id = ?;", (node_id,)
+    )
+    if not rows:
+      return {"stats": "Node not found in database", "lines": []}
+
+    file_path, level, pos = rows[0]
+    file_path = (file_path or "").strip('"')
+    try:
+      mtime = os.stat(file_path).st_mtime_ns
+    except OSError:
+      return {"stats": "File not found", "lines": [(file_path, "dim", 0)]}
+
+    key = (node_id, mtime)
+    cached = self.preview_cache.get(key)
+    if cached:
+      return cached
+
+    try:
+      with open(file_path, encoding="utf-8", errors="replace") as f:
+        text = f.read(MAX_READ_CHARS)
+    except OSError as e:
+      return {"stats": f"Cannot read file: {e.strerror}", "lines": []}
+
+    # Heading-level nodes: pos is a 1-based character offset into the file
+    if level and pos:
+      text = text[pos - 1 :]
+
+    words, subheads, lines = self._summarize_org(text, level)
+    n_out = self._count(
+        "SELECT COUNT(*) FROM links WHERE source = ? AND type = '\"id\"';",
+        node_id,
+    )
+    n_in = self._count(
+        "SELECT COUNT(*) FROM links WHERE dest = ? AND type = '\"id\"';",
+        node_id,
+    )
+
+    kind = f"heading (level {level})" if level else "file"
+    stats = (
+        f"{kind} · {words} words · {subheads} subheadings"
+        f" · {n_out} out / {n_in} in"
+    )
+    if words < STUB_WORDS:
+      stats += " · looks like a stub"
+
+    result = {"stats": stats, "lines": lines}
+    if self.db_ok:  # don't cache a result built from a failed query
+      if len(self.preview_cache) > 500:
+        self.preview_cache.clear()
+      self.preview_cache[key] = result
+    return result
+
+  def draw_preview(self, stdscr, top, rows, width):
+    """Draw the preview pane into screen rows [top, top + rows)."""
+
+    def put(y, text, attr=0):
+      try:
+        stdscr.addstr(y, 2, text[: width - 4], attr)
+      except curses.error:
+        pass
+
+    try:
+      stdscr.addstr(top, 0, "─" * (width - 1))
+    except curses.error:
+      pass
+
+    if not self.connections:
+      return
+    preview = self.get_preview(self.connections[self.selected_idx])
+    put(top + 1, preview["stats"], curses.A_BOLD)
+
+    body_rows = rows - 2
+    lines = preview["lines"] or [("(no body text)", "dim", 0)]
+    truncated = len(lines) > body_rows
+    for i, (text, kind, lvl) in enumerate(lines[:body_rows]):
+      if truncated and i == body_rows - 1:
+        text, kind, lvl = "  …", "dim", 0
+      if kind == "heading":
+        pair = HEADING_PAIRS[min(lvl, len(HEADING_PAIRS)) - 1]
+        attr = curses.color_pair(pair) | curses.A_BOLD
+      elif kind == "dim":
+        attr = curses.A_DIM
+      else:
+        attr = 0
+      put(top + 2 + i, text, attr)
 
   def load_connections(self, node_id):
     """Fetch incoming and outgoing ID links for the given node."""
@@ -172,6 +345,7 @@ class OrgRoamNavigator:
     """Re-read the current node and its connections, keeping the selection."""
     if self.current_node is None:
       return
+    self.preview_cache.clear() 
 
     selected_key = None
     if self.connections and self.selected_idx < len(self.connections):
@@ -221,7 +395,9 @@ class OrgRoamNavigator:
     curses.init_pair(2, curses.COLOR_GREEN, -1)  # Backlinks
     curses.init_pair(3, curses.COLOR_YELLOW, -1)  # Outlinks
     curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header
-
+    curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # Heading level 2
+    curses.init_pair(6, curses.COLOR_CYAN, -1)  # Heading level 3
+    
     while True:
       stdscr.clear()
       height, width = stdscr.getmaxyx()
@@ -247,7 +423,10 @@ class OrgRoamNavigator:
       stdscr.addstr(3, 0, "─" * (width - 1))
 
       # --- Calculate Viewport Bounds ---
-      max_items = max(1, height - 6)
+      preview_rows = 0
+      if self.show_preview and height >= PREVIEW_MIN_HEIGHT:
+        preview_rows = (height - 6) // 2
+      max_items = max(1, height - 6 - preview_rows)
 
       # Keep selected item inside viewport
       if self.selected_idx < self.top_idx:
@@ -286,10 +465,16 @@ class OrgRoamNavigator:
             stdscr.attroff(color)
             stdscr.addstr(row_y, 2 + len(prefix), conn["title"])
 
+      if preview_rows:
+        self.draw_preview(stdscr, height - 1 - preview_rows, preview_rows, width)
+            
       # --- Render Footer ---
+      # footer = (
+      #     " [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |"
+      #     " [r]: Refresh | [e]: Emacs | [q]: Quit"
+      # )
       footer = (
-          " [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |"
-          " [r]: Refresh | [e]: Emacs | [q]: Quit"
+          " j/k:Move  l:Jump  h:Back  r:Refresh  e:Emacs  p:Preview  q:Quit"
       )
       
       if self.status:
@@ -312,6 +497,9 @@ class OrgRoamNavigator:
         elif self.db_ok:
           self.status = "Node no longer exists in the database"
 
+      elif key in (ord("p"), ord("P")):
+        self.show_preview = not self.show_preview
+          
       elif key in (ord("r"), ord("R")):
         self.refresh()
         
