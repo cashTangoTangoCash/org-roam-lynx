@@ -1,0 +1,26 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 19</h1>
+<p><strong><a href="20261011_164841_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>Agreed on the design. I'll add this as a second, separate marker so the live cursor stays on MAIN and the marker only reminds you where you were.I've updated <code>org_roam_lynx_browse_graph.py</code> with the reminder highlight, and a scripted run of the UI (jump, back, move, jump again, refresh) behaved as described below with no crashes. The yellow color check was only a loose match on the terminal output, so it's worth a look in your own terminal.</p>
+<p><strong>How it behaves</strong></p>
+<ul>
+<li><strong>Cursor:</strong> the live cursor is the black-on-cyan row, as before, and it lands on MAIN after a Back.</li>
+<li><strong>Reminder:</strong> the node you just came back from gets a black-on-yellow row plus a <code>←</code> in the left margin. The cursor never moves there on its own.</li>
+<li><strong>Overlap:</strong> if you move the cursor onto the reminder row, the cursor color wins, but the <code>←</code> stays.</li>
+<li><strong>When it clears:</strong> the reminder stays through <code>j</code>/<code>k</code>, paging, and refresh. It clears when you jump forward. Another Back replaces it with the node you just left.</li>
+<li><strong>Missing row:</strong> if the link has since disappeared, there is no row to mark.</li>
+</ul>
+<p><strong>One addition you didn't ask for:</strong> after a Back, the header line also says <code>← came from: Bravo (3/12)</code>. On a long list, the came-from row can be scrolled off screen while the cursor sits on MAIN, and a reminder you can't see doesn't remind anyone. The number is the item position, so <code>j</code> that many times gets you there.</p>
+<p><strong>On &quot;busy&quot;:</strong> the second highlight only appears right after a Back, so you never see two highlights during normal browsing. If it feels like too much after real use, the pieces are separate and easy to drop:</p>
+<ul>
+<li>delete the <code>came_note</code> lines to drop the header text</li>
+<li>delete the <code>CAME_FROM_GLYPH</code> write to drop the margin arrow</li>
+<li>change the <code>curses.init_pair(CAME_FROM_PAIR, ...)</code> line to retune the color</li>
+</ul>
+<p>I chose yellow because yellow is the one distinct background left from the 8 basic terminal colors. Yellow text also marks OUT labels, so if that association bothers you, try white-on-blue.</p>
+<p>I made the marker appear only after Back, as you described. A forward jump could also mark the node you came from, since it's always in the new list, but I left it out so the reminder stays tied to retracing steps.</p>
+<p>The README is still pending: the keys table, the MAIN/BIDIR/reminder explanation, and the roadmap cleanup. Want me to regenerate it?</p>
+<hr />
+<p><strong><a href="20261011_164841_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_164847_capture.md&quot;)</p>

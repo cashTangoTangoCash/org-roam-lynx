@@ -2496,3 +2496,37 @@ The README now has three items out of date. The key table needs `e` described as
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_163418_capture.md")
 
 ---
+
+# PROMPT 19
+The idea of highlighting the node we 'came back from' is good but it should be a indicator highlight that is different than the functional highlight that initially sits on MAIN.  it only indicates or reminds us where we came from.  the 'functional' highlight on MAIN means we are here and the preview is of MAIN.  then we move that 'functional' highlight to a link farther down and that allows us to preview and perform functions on that link associated with MAIN.  This is starting to seem 'busy' to me but it might be natural or intuitive when using the software - it might just be hard to precisely describe in prose.  of course the two highlights must use different colors.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_164841_capture.md")
+
+---
+
+# RESPONSE 19
+Agreed on the design. I'll add this as a second, separate marker so the live cursor stays on MAIN and the marker only reminds you where you were.I've updated `org_roam_lynx_browse_graph.py` with the reminder highlight, and a scripted run of the UI (jump, back, move, jump again, refresh) behaved as described below with no crashes. The yellow color check was only a loose match on the terminal output, so it's worth a look in your own terminal.
+
+**How it behaves**
+- **Cursor:** the live cursor is the black-on-cyan row, as before, and it lands on MAIN after a Back.
+- **Reminder:** the node you just came back from gets a black-on-yellow row plus a `←` in the left margin. The cursor never moves there on its own.
+- **Overlap:** if you move the cursor onto the reminder row, the cursor color wins, but the `←` stays.
+- **When it clears:** the reminder stays through `j`/`k`, paging, and refresh. It clears when you jump forward. Another Back replaces it with the node you just left.
+- **Missing row:** if the link has since disappeared, there is no row to mark.
+
+**One addition you didn't ask for:** after a Back, the header line also says `← came from: Bravo (3/12)`. On a long list, the came-from row can be scrolled off screen while the cursor sits on MAIN, and a reminder you can't see doesn't remind anyone. The number is the item position, so `j` that many times gets you there.
+
+**On "busy":** the second highlight only appears right after a Back, so you never see two highlights during normal browsing. If it feels like too much after real use, the pieces are separate and easy to drop:
+- delete the `came_note` lines to drop the header text
+- delete the `CAME_FROM_GLYPH` write to drop the margin arrow
+- change the `curses.init_pair(CAME_FROM_PAIR, ...)` line to retune the color
+
+I chose yellow because yellow is the one distinct background left from the 8 basic terminal colors. Yellow text also marks OUT labels, so if that association bothers you, try white-on-blue.
+
+I made the marker appear only after Back, as you described. A forward jump could also mark the node you came from, since it's always in the new list, but I left it out so the reminder stays tied to retracing steps.
+
+The README is still pending: the keys table, the MAIN/BIDIR/reminder explanation, and the roadmap cleanup. Want me to regenerate it?
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_164847_capture.md")
+
+---

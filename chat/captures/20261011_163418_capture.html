@@ -1,6 +1,6 @@
 <style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
 <h1>RESPONSE 18</h1>
-<p><strong><a href="20261011_163411_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p><strong><a href="20261011_163411_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261011_164841_capture.html">Next →</a></strong></p>
 <hr />
 <p>I'll write the whole file this time rather than a patch. Several areas change at once (<code>load_connections</code>, the render block, the key handlers, <code>refresh</code>), and a full file is harder to misapply. The shell script needs no changes.Next I'll test it against a fake org-roam database, since I can't run your real one. The test covers the link-merging logic and a scripted drive of the curses UI.The updated <code>org_roam_lynx_browse_graph.py</code> is done, and the shell script needs no changes. I tested it against a fake org-roam database, not your real one. The link logic checked out, and a scripted run of the curses UI (move, jump, back, refresh, preview toggle) exited cleanly with no tracebacks. The <code>e</code> key without a running Emacs server only checked that nothing crashes.</p>
 <p>Before you replace your copy, run <code>diff -u your_current.py new.py | less</code>, so you can see exactly what changed.</p>
@@ -23,5 +23,5 @@
 <p><strong>Possible next step:</strong> when you go Back, highlight the node you just came from instead of MAIN. It makes retracing a path in Lynx or Midnight Commander feel natural, but it's your call, since you asked for MAIN.</p>
 <p>The README now has three items out of date. The key table needs <code>e</code> described as opening the highlighted node, the list needs MAIN and BIDIR explained, and the &quot;open the highlighted node&quot; roadmap item can go. Want me to regenerate it?</p>
 <hr />
-<p><strong><a href="20261011_163411_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p><strong><a href="20261011_163411_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261011_164841_capture.html">Next →</a></strong></p>
 <p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_163418_capture.md&quot;)</p>

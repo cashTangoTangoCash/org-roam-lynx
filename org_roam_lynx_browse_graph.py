@@ -39,6 +39,8 @@ TYPE_PAIRS = {"MAIN": 4, "BIDIR": 5, "OUT": 3, "IN": 2}
 # Sort order of linked rows below the MAIN row
 TYPE_RANK = {"BIDIR": 0, "OUT": 1, "IN": 2}
 LABEL_WIDTH = 5  # len("BIDIR"), so the titles line up
+CAME_FROM_PAIR = 7  # color pair for the "you came back from here" reminder row
+CAME_FROM_GLYPH = "←"  # margin marker on that row (works without color too)
 
 HEADING_RE = re.compile(r"^(\*+)\s+(.*)")
 DRAWER_START_RE = re.compile(r"^\s*:[A-Za-z_-]+:\s*$")
@@ -65,6 +67,9 @@ class OrgRoamNavigator:
     self.history: list[tuple[str, str, str]] = []
     self.selected_idx = 0  # 0 is always the MAIN row
     self.top_idx = 0  # Viewport scroll offset
+    # ID of the node we just came Back from. Drawn as a reminder row and
+    # cleared on the next jump. Separate from selected_idx, the live cursor.
+    self.came_from_id = None
     self.status = ""  # Transient message shown in the footer
     self.db_ok = True  # False if the most recent query failed
     self.show_preview = True  # set False to start with the pane hidden
@@ -405,14 +410,16 @@ class OrgRoamNavigator:
 
   def go_back(self):
     """Pop history, re-reading each node and skipping any that were deleted."""
+    came_from = self.current_node[0]
     while self.history:
       prev = self.history.pop()
       node = self.lookup_node(prev[0])
       if node:
         self.current_node = node
         self.connections = self.load_connections(node)
-        self.selected_idx = 0
+        self.selected_idx = 0  # live cursor lands on MAIN
         self.top_idx = 0
+        self.came_from_id = came_from  # reminder marker, not the cursor
         return
       if not self.db_ok:
         self.history.append(prev)  # DB hiccup, not a deletion: keep it
@@ -490,6 +497,8 @@ class OrgRoamNavigator:
     curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header / MAIN / heading 1
     curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # BIDIR / heading 2
     curses.init_pair(6, curses.COLOR_CYAN, -1)  # Heading level 3
+    # Reminder row after Back; must differ from the cursor (pair 1)
+    curses.init_pair(CAME_FROM_PAIR, curses.COLOR_BLACK, curses.COLOR_YELLOW)
 
     while True:
       stdscr.clear()
@@ -510,12 +519,27 @@ class OrgRoamNavigator:
         curr_pos = "MAIN"
       else:
         curr_pos = f"{self.selected_idx}/{link_count}"
-      stdscr.addstr(
-          2,
-          0,
+
+      # Row index of the node we came Back from (None if absent or not linked
+      # any more). Index 0 is MAIN, so it is never the came-from row.
+      came_idx = None
+      if self.came_from_id is not None:
+        for i, c in enumerate(self.connections):
+          if i > 0 and c["id"] == self.came_from_id:
+            came_idx = i
+            break
+
+      # Named in the header too, because on a long list the row itself may be
+      # scrolled out of view while the cursor sits on MAIN.
+      came_note = ""
+      if came_idx is not None:
+        came_title = self.connections[came_idx]["title"]
+        came_note = f" | {CAME_FROM_GLYPH} came from: {came_title} ({came_idx}/{link_count})"
+      info_line = (
           f" History Stack: {len(self.history)} | Connections: {link_count}"
-          f" (Item {curr_pos})"[: width - 1],
+          f" (Item {curr_pos})" + came_note
       )
+      stdscr.addstr(2, 0, info_line[: width - 1])
       stdscr.addstr(3, 0, "─" * (width - 1))
 
       # --- Calculate Viewport Bounds ---
@@ -544,10 +568,17 @@ class OrgRoamNavigator:
           prefix = f"[{conn['type']:<{LABEL_WIDTH}}] "
           item_str = f"{prefix}{conn['title']}"[: width - 4]
 
+          if actual_idx == came_idx:
+            stdscr.addstr(row_y, 0, CAME_FROM_GLYPH, curses.A_BOLD)
+
           if actual_idx == self.selected_idx:
             stdscr.attron(curses.color_pair(1))
             stdscr.addstr(row_y, 2, item_str.ljust(width - 4))
             stdscr.attroff(curses.color_pair(1))
+          elif actual_idx == came_idx:
+            stdscr.attron(curses.color_pair(CAME_FROM_PAIR))
+            stdscr.addstr(row_y, 2, item_str.ljust(width - 4))
+            stdscr.attroff(curses.color_pair(CAME_FROM_PAIR))
           else:
             color = curses.color_pair(TYPE_PAIRS[conn["type"]])
             stdscr.attron(color)
@@ -632,6 +663,7 @@ class OrgRoamNavigator:
             self.status = "Already at this node"
           else:
             self.history.append(self.current_node)
+            self.came_from_id = None  # the reminder only applies after Back
             self.current_node = (
                 target["id"],
                 target["title"],
