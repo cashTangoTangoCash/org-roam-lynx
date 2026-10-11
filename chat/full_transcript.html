@@ -2192,3 +2192,42 @@ The README is still pending: the keys table, the MAIN/BIDIR/reminder explanation
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_164847_capture.md")
 
 ---
+
+# PROMPT 20
+before housecleaning on README.md, I want another change that had jumped out at me.  The preview has a first line of 'stats.'  it starts out with 'file' which is rather generic and uninformative - everything is a file (in Linux anyway - I think).  instead of 'file' let's write the title of the node being previewed.  if possible, the stats line could have last modified and first created information for the node being previewed.  I imagine those items could be a bit hard to get right - they should easily mean something to a human.  I don't know if there is a python utility to do that.  time created would just be a simple date stamp like 10/11/2026.  maybe that's the right choice for last modified too.  a fancier thing would be "2 minutes ago" "8 days ago" "2 years ago" and so forth - maybe too fancy to easily incorporate.  A simple date stamp for last modified is better than nothing I think.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_170336_capture.md")
+
+---
+
+# RESPONSE 20
+Both dates need caution, because Org-roam's database stores neither one. I'll use what's actually available and tell you how reliable each source is.The edits applied and the file compiles. The error at the end is only my line-count diff failing in `sh`. Now the tests.I've updated `org_roam_lynx_browse_graph.py`. It passes the earlier checks (the came-from marker and the UI at several terminal sizes) plus new ones for the dates, but only against a fake database, not your real notes. Please try it on real notes before relying on the dates.
+
+**What the preview header looks like now**
+```
+Physical therapy log
+212 words · 3 subheadings · 2 out / 3 in · looks like a stub
+created 03/12/2024 · modified 10/03/2026 (8 days ago)
+```
+- **Title:** the node's title gets its own bold line, replacing "file". I didn't put it on the stats line, because title plus counts plus two dates won't fit in 80 columns. On a wide terminal the stats and dates share one line. For sub-file nodes, `heading (level N)` still appears first in the stats, since that's the one case where "file" vs "heading" tells you something.
+- **Relative time:** "8 days ago" wasn't hard, so you get both the date and the relative form for modified. The cache holds raw timestamps and the text is built at draw time, so it can't go stale.
+- **Date format:** it's `%m/%d/%Y`, matching your 10/11/2026 example. Change `DATE_FORMAT` near the top for `%Y-%m-%d`.
+
+**Where the dates come from** (Org-roam's database doesn't store either one)
+- **Modified:** the file's modification time. It's trustworthy, but for a heading-level node it's the whole file's date, not that heading's.
+- **Created:**
+  - First choice is a timestamp at the start of the filename, like `20240312123456-slug.org`, `20240312-slug.org`, or `2024-03-12.org`. That's the case where created is reliable.
+  - If there isn't one, it falls back to the filesystem's creation time. Copying, syncing, or a git checkout can reset that to the day the file arrived on this machine, so treat it as a guess for files without a timestamped name.
+  - If neither works, the created field is simply left out.
+
+**Two small things you didn't ask for**
+- I fixed a mismatch from my earlier dedupe change. The `out / in` counts were counting raw link rows, so Alpha in my test data said `4 out / 3 in` while its list had three linked rows. They now count distinct linked nodes, excluding self-links and broken links, so they agree with the list.
+- The text now says "1 subheading" instead of "1 subheadings".
+
+**Limit:** the info lines make the preview pane header taller, so on a short terminal (around 17 rows) the lowest info lines get cut off. The `looks like a stub` flag comes before the dates, so it survives.
+
+If your notes use a `:CREATED:` property or `#+date:` line instead of timestamped filenames, I can read that as the first choice for created. Two things are pending: the README housecleaning (keys, MAIN/BIDIR, the reminder highlight, and now the preview header and where the dates come from), and a second look at the shell script's fzf preview if you want it to match.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_170341_capture.md")
+
+---

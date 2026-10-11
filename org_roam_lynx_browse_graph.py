@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 # ----------------------------------------------------------------------
@@ -46,6 +47,86 @@ HEADING_RE = re.compile(r"^(\*+)\s+(.*)")
 DRAWER_START_RE = re.compile(r"^\s*:[A-Za-z_-]+:\s*$")
 DRAWER_END_RE = re.compile(r"^\s*:END:\s*$", re.IGNORECASE)
 LINK_RE = re.compile(r"\[\[[^\]]*\]\[([^\]]*)\]\]|\[\[([^\]]*)\]\]")
+
+DATE_FORMAT = "%m/%d/%Y"  # 10/11/2026. For 2026-10-11 use "%Y-%m-%d"
+# Timestamp at the start of a filename: 20260311123456-slug.org (org-roam's
+# default), 20260311-slug.org, or 2026-03-11.org (org-roam-dailies)
+FILENAME_STAMP_RE = re.compile(
+    r"^(\d{4})-?(\d{2})-?(\d{2})(?:[-_T]?(\d{2})(\d{2})(\d{2}))?"
+)
+
+
+def pluralize(n, word):
+  return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def format_date(ts):
+  """Epoch seconds -> a plain date such as 10/11/2026."""
+  return datetime.fromtimestamp(ts).strftime(DATE_FORMAT)
+
+
+def humanize_ago(ts):
+  """Epoch seconds -> '8 days ago'. Deliberately coarse."""
+  secs = max(0, int(time.time() - ts))
+  for unit, size in (
+      ("year", 365 * 86400),
+      ("month", 30 * 86400),
+      ("day", 86400),
+      ("hour", 3600),
+      ("minute", 60),
+  ):
+    n = secs // size
+    if n >= 1:
+      return f"{pluralize(n, unit)} ago"
+  return "just now"
+
+
+def pack_parts(parts, max_width, sep=" · "):
+  """Join parts with sep, starting a new line whenever one would overflow."""
+  lines, cur = [], ""
+  for part in parts:
+    cand = f"{cur}{sep}{part}" if cur else part
+    if cur and len(cand) > max_width:
+      lines.append(cur)
+      cur = part
+    else:
+      cur = cand
+  if cur:
+    lines.append(cur)
+  return lines
+
+
+def created_time(path):
+  """Best available creation time (epoch seconds), or None.
+
+  Org-roam's database does not record this, so: first a timestamp in the
+  filename (reliable when your files are named that way), then the
+  filesystem's creation time (which copying, syncing or a git checkout can
+  reset to the day it landed on this machine).
+  """
+  m = FILENAME_STAMP_RE.match(os.path.basename(path))
+  if m:
+    y, mo, d, hh, mm, ss = m.groups()
+    try:
+      if 1990 <= int(y) <= 2100:
+        return datetime(
+            int(y), int(mo), int(d), int(hh or 0), int(mm or 0), int(ss or 0)
+        ).timestamp()
+    except ValueError:
+      pass  # digits that are not a real date; fall through
+
+  try:
+    birth = getattr(os.stat(path), "st_birthtime", None)  # macOS/BSD
+    if birth:
+      return birth
+    # Linux: Python does not expose it, but GNU stat does (%W; 0 or "-" if
+    # the filesystem does not track it)
+    out = subprocess.run(
+        ["stat", "-c", "%W", path], capture_output=True, text=True, timeout=2
+    ).stdout.strip()
+    return int(out) if int(out) > 0 else None
+  except (OSError, ValueError, subprocess.SubprocessError):
+    return None
 
 
 class OrgRoamNavigator:
@@ -221,6 +302,11 @@ class OrgRoamNavigator:
     flush_hidden()
     return words, subheads, out
 
+  @staticmethod
+  def _preview_note(conn, message, lines=()):
+    """A preview that only carries a message (missing node, unreadable file)."""
+    return {"title": conn["title"], "parts": [message], "lines": list(lines)}
+
   def get_preview(self, conn):
     """Build (or fetch from cache) the preview for a connection dict."""
     node_id = conn["id"]
@@ -228,14 +314,16 @@ class OrgRoamNavigator:
         "SELECT file, level, pos FROM nodes WHERE id = ?;", (node_id,)
     )
     if not rows:
-      return {"stats": "Node not found in database", "lines": []}
+      return self._preview_note(conn, "Node not found in database")
 
     file_path, level, pos = rows[0]
     file_path = (file_path or "").strip('"')
     try:
       mtime = os.stat(file_path).st_mtime_ns
     except OSError:
-      return {"stats": "File not found", "lines": [(file_path, "dim", 0)]}
+      return self._preview_note(
+          conn, "File not found", [(file_path, "dim", 0)]
+      )
 
     key = (node_id, mtime)
     cached = self.preview_cache.get(key)
@@ -246,31 +334,48 @@ class OrgRoamNavigator:
       with open(file_path, encoding="utf-8", errors="replace") as f:
         text = f.read(MAX_READ_CHARS)
     except OSError as e:
-      return {"stats": f"Cannot read file: {e.strerror}", "lines": []}
+      return self._preview_note(conn, f"Cannot read file: {e.strerror}")
 
     # Heading-level nodes: pos is a 1-based character offset into the file
     if level and pos:
       text = text[pos - 1 :]
 
     words, subheads, lines = self._summarize_org(text, level)
+    # Distinct linked nodes (not raw link rows), excluding self-links and
+    # broken links, so the numbers agree with the rows in the list
     n_out = self._count(
-        "SELECT COUNT(*) FROM links WHERE source = ? AND type = '\"id\"';",
+        "SELECT COUNT(DISTINCT l.dest) FROM links l"
+        " JOIN nodes n ON l.dest = n.id"
+        " WHERE l.source = ? AND l.dest != l.source AND l.type = '\"id\"';",
         node_id,
     )
     n_in = self._count(
-        "SELECT COUNT(*) FROM links WHERE dest = ? AND type = '\"id\"';",
+        "SELECT COUNT(DISTINCT l.source) FROM links l"
+        " JOIN nodes n ON l.source = n.id"
+        " WHERE l.dest = ? AND l.source != l.dest AND l.type = '\"id\"';",
         node_id,
     )
 
-    kind = f"heading (level {level})" if level else "file"
-    stats = (
-        f"{kind} · {words} words · {subheads} subheadings"
-        f" · {n_out} out / {n_in} in"
-    )
+    parts = []
+    if level:
+      parts.append(f"heading (level {level})")
+    parts += [
+        pluralize(words, "word"),
+        pluralize(subheads, "subheading"),
+        f"{n_out} out / {n_in} in",
+    ]
     if words < STUB_WORDS:
-      stats += " · looks like a stub"
+      parts.append("looks like a stub")
 
-    result = {"stats": stats, "lines": lines}
+    # Raw timestamps are what gets cached; "8 days ago" is built at draw time
+    # so it cannot go stale while the entry sits in the cache.
+    result = {
+        "title": conn["title"],
+        "parts": parts,
+        "created": created_time(file_path),
+        "modified": mtime / 1e9,
+        "lines": lines,
+    }
     if self.db_ok:  # don't cache a result built from a failed query
       if len(self.preview_cache) > 500:
         self.preview_cache.clear()
@@ -294,9 +399,23 @@ class OrgRoamNavigator:
     if not self.connections:
       return
     preview = self.get_preview(self.connections[self.selected_idx])
-    put(top + 1, preview["stats"], curses.A_BOLD)
+    put(top + 1, preview["title"], curses.A_BOLD)
 
-    body_rows = rows - 2
+    info = list(preview["parts"])
+    if preview.get("created"):
+      info.append(f"created {format_date(preview['created'])}")
+    if preview.get("modified"):
+      m = preview["modified"]
+      info.append(f"modified {format_date(m)} ({humanize_ago(m)})")
+    # Wraps onto a second line on narrow terminals; always leave a body row
+    info_lines = pack_parts(info, width - 4)[: max(0, rows - 3)]
+    for i, text in enumerate(info_lines):
+      put(top + 2 + i, text)
+
+    body_top = top + 2 + len(info_lines)
+    body_rows = rows - 2 - len(info_lines)
+    if body_rows <= 0:
+      return
     lines = preview["lines"] or [("(no body text)", "dim", 0)]
     truncated = len(lines) > body_rows
     for i, (text, kind, lvl) in enumerate(lines[:body_rows]):
@@ -309,7 +428,7 @@ class OrgRoamNavigator:
         attr = curses.A_DIM
       else:
         attr = 0
-      put(top + 2 + i, text, attr)
+      put(body_top + i, text, attr)
 
   def load_connections(self, node):
     """Return the MAIN row followed by one row per linked node.
