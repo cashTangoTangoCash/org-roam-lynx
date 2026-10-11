@@ -4,6 +4,11 @@
 
 Move through your notes the way you move through directories in Midnight Commander or follow links in Lynx: pick a node, see everything it links to and everything that links back to it, press a key to jump, press another to go back. No browser, no server, no waiting.
 
+In this GIF, we are roaming slowly so you can see what is going on.  Node preview is being turned on and off.
+<p align="center">
+  <img src="docs/GIFs/simple-demo.gif" alt="Lynx-style Org-Roam Terminal Explorer Demo" width="700">
+</p>
+
 Choose a starting node via the shell script:
 ![Choose a starting node with the shell script](docs/images/choose-starting-node-with-shell-script.jpg)
 
@@ -12,6 +17,10 @@ Roam around your org roam node network (preview turned off):
 
 Roam around your org roam node network (preview turned on):
 ![Roam around lynx-style with preview](docs/images/roam-around-with-preview.jpg)
+
+Please note: this is designed for use with an Emacs session running
+(e.g. GUI Emacs running in another PC monitor).  The GIF doesn't show
+how we can hit the "e" key and visit a node in Emacs.
 
 ## Why?
 
@@ -73,9 +82,10 @@ export ROAM_LYNX_PY=/path/to/org_roam_lynx_browse_graph.py
 ### Search, then browse
 
 ```bash
-roam            # fzf over all nodes, most recently modified first
-roam bike       # pre-filtered to titles and aliases matching "bike"
-roam --help     # brief help
+org-roam-lynx-find-starting-node-then-browse-graph.sh              # fzf over all nodes, most recently modified first
+org-roam-lynx-find-starting-node-then-browse-graph.sh bike         # pre-filtered to titles and aliases matching "bike"
+org-roam-lynx-find-starting-node-then-browse-graph.sh "bike shop"  # put a phrase in double quotes
+org-roam-lynx-find-starting-node-then-browse-graph.sh --help       # brief help
 ```
 
 If exactly one node matches, you go straight into the browser. Otherwise fzf lets you pick one, with a live file preview alongside.
