@@ -1,0 +1,20 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 21</h1>
+<p><strong><a href="20261011_171237_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>Nothing in the shell script needs to change. It hands over the node ID and DB path, and the Python side handles everything new. I kept your wording, GIF, screenshots, Contributing, &quot;How it was Developed&quot;, and License sections and only changed what the new behavior made out of date.I've updated <code>README.md</code>. Your GIF, screenshots, Contributing, &quot;How it was Developed&quot;, License, and Acknowledgments sections are untouched.</p>
+<p><strong>Changes</strong></p>
+<ul>
+<li><strong>Features and Why?:</strong> they now describe the MAIN row, <code>BIDIR</code>, the came-from reminder, the preview header with dates, and <code>e</code> working on any highlighted row.</li>
+<li><strong>Reading the screen:</strong> this is a new section with a label table (<code>MAIN</code>, <code>BIDIR</code>, <code>OUT</code>, <code>IN</code>), the came-from reminder, the preview header, and where the dates come from.</li>
+<li><strong>Keys table:</strong> <code>e</code> now opens the highlighted row, <code>l</code> does nothing on MAIN, and there's a note that the footer hints change with the highlighted row.</li>
+<li><strong>Tweaking the look:</strong> a short table covers the constants in the script, including <code>DATE_FORMAT</code>, <code>STUB_WORDS</code>, and <code>TYPE_RANK</code>.</li>
+<li><strong>Known limitations:</strong> it now includes the date caveats. Dates belong to the file, and created can be wrong when the filename has no timestamp and the file was copied or synced.</li>
+<li><strong>Requirements:</strong> GNU <code>stat</code> is listed as an optional piece, for creation dates on Linux.</li>
+<li><strong>Roadmap:</strong> the &quot;open the highlighted node&quot; item is gone, since it's done, and I added reading a <code>:CREATED:</code> property or <code>#+date:</code> line.</li>
+</ul>
+<p><strong>Your GIF and screenshots show the old interface</strong> with no MAIN row and no came-from reminder. The README text now describes the new behavior, so the pictures and prose will disagree until you retake them. A fresh GIF would be a good chance to show <code>e</code> and the came-from highlight, since the current one doesn't show <code>e</code> at all.</p>
+<p><strong>Shell script:</strong> you were right that nothing needed changing. The fzf preview there is a plain <code>head -n 30</code> of the file, which is fine for choosing a starting node.</p>
+<hr />
+<p><strong><a href="20261011_171237_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_171242_capture.md&quot;)</p>

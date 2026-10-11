@@ -2569,3 +2569,32 @@ If your notes use a `:CREATED:` property or `#+date:` line instead of timestampe
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_170341_capture.md")
 
 ---
+
+# PROMPT 21
+I have posted the old README.md so we are starting on the same page.
+
+AFAIK nothing should have needed changing in the shell script but I could be wrong.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_171237_capture.md")
+
+---
+
+# RESPONSE 21
+Nothing in the shell script needs to change. It hands over the node ID and DB path, and the Python side handles everything new. I kept your wording, GIF, screenshots, Contributing, "How it was Developed", and License sections and only changed what the new behavior made out of date.I've updated `README.md`. Your GIF, screenshots, Contributing, "How it was Developed", License, and Acknowledgments sections are untouched.
+
+**Changes**
+- **Features and Why?:** they now describe the MAIN row, `BIDIR`, the came-from reminder, the preview header with dates, and `e` working on any highlighted row.
+- **Reading the screen:** this is a new section with a label table (`MAIN`, `BIDIR`, `OUT`, `IN`), the came-from reminder, the preview header, and where the dates come from.
+- **Keys table:** `e` now opens the highlighted row, `l` does nothing on MAIN, and there's a note that the footer hints change with the highlighted row.
+- **Tweaking the look:** a short table covers the constants in the script, including `DATE_FORMAT`, `STUB_WORDS`, and `TYPE_RANK`.
+- **Known limitations:** it now includes the date caveats. Dates belong to the file, and created can be wrong when the filename has no timestamp and the file was copied or synced.
+- **Requirements:** GNU `stat` is listed as an optional piece, for creation dates on Linux.
+- **Roadmap:** the "open the highlighted node" item is gone, since it's done, and I added reading a `:CREATED:` property or `#+date:` line.
+
+**Your GIF and screenshots show the old interface** with no MAIN row and no came-from reminder. The README text now describes the new behavior, so the pictures and prose will disagree until you retake them. A fresh GIF would be a good chance to show `e` and the came-from highlight, since the current one doesn't show `e` at all.
+
+**Shell script:** you were right that nothing needed changing. The fzf preview there is a plain `head -n 30` of the file, which is fine for choosing a starting node.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_171242_capture.md")
+
+---
