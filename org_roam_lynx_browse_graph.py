@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-import subprocess
+import argparse
 import curses
 import os
+import re
 import sqlite3
+import subprocess
 import sys
 import time
-import re
-import argparse
 from pathlib import Path
 
 # ----------------------------------------------------------------------
 # Configuration / Hardcoded Defaults
 # ----------------------------------------------------------------------
+
 
 def resolve_db_path(cli_db=None):
   """--db, then $ORG_ROAM_DB, then XDG location, then ~/.emacs.d."""
@@ -25,17 +26,25 @@ def resolve_db_path(cli_db=None):
     return xdg_db
   return os.path.expanduser("~/.emacs.d/org-roam.db")
 
+
 START_NODE_TITLE = "a bike accident and injury"
-PREVIEW_MIN_HEIGHT = 16    # hide the pane on very short terminals
-MAX_READ_CHARS = 200_000   # cap on how much of a file we read
-MAX_BODY_LINES = 4         # body lines shown per heading (poor man's folding)
-STUB_WORDS = 40            # fewer words than this gets flagged as a stub
+PREVIEW_MIN_HEIGHT = 16  # hide the pane on very short terminals
+MAX_READ_CHARS = 200_000  # cap on how much of a file we read
+MAX_BODY_LINES = 4  # body lines shown per heading (poor man's folding)
+STUB_WORDS = 40  # fewer words than this gets flagged as a stub
 HEADING_PAIRS = (4, 5, 6, 3)  # curses color pairs for heading levels 1-4+
+
+# Row labels in the list -> curses color pair (see init_pair calls in run)
+TYPE_PAIRS = {"MAIN": 4, "BIDIR": 5, "OUT": 3, "IN": 2}
+# Sort order of linked rows below the MAIN row
+TYPE_RANK = {"BIDIR": 0, "OUT": 1, "IN": 2}
+LABEL_WIDTH = 5  # len("BIDIR"), so the titles line up
 
 HEADING_RE = re.compile(r"^(\*+)\s+(.*)")
 DRAWER_START_RE = re.compile(r"^\s*:[A-Za-z_-]+:\s*$")
 DRAWER_END_RE = re.compile(r"^\s*:END:\s*$", re.IGNORECASE)
 LINK_RE = re.compile(r"\[\[[^\]]*\]\[([^\]]*)\]\]|\[\[([^\]]*)\]\]")
+
 
 class OrgRoamNavigator:
 
@@ -43,7 +52,7 @@ class OrgRoamNavigator:
     self.db_path = db_path
     self.initial_title = initial_title
     self.initial_id = initial_id
-    
+
     if not os.path.exists(self.db_path):
       print(f"Error: Database not found at {self.db_path}")
       sys.exit(1)
@@ -54,15 +63,15 @@ class OrgRoamNavigator:
 
     # Navigation state
     self.history: list[tuple[str, str, str]] = []
-    self.selected_idx = 0
+    self.selected_idx = 0  # 0 is always the MAIN row
     self.top_idx = 0  # Viewport scroll offset
     self.status = ""  # Transient message shown in the footer
     self.db_ok = True  # False if the most recent query failed
-    self.current_node: tuple[str, str, str] = self.find_initial_node()
-    self.connections = self.load_connections(self.current_node[0])
     self.show_preview = True  # set False to start with the pane hidden
     self.preview_cache: dict = {}  # (node_id, file mtime_ns) -> preview
-    
+    self.current_node: tuple[str, str, str] = self.find_initial_node()
+    self.connections = self.load_connections(self.current_node)
+
   def find_initial_node(self):
     """Start node: by ID if given, else exact title, else substring, else first."""
     if self.initial_id:
@@ -161,7 +170,7 @@ class OrgRoamNavigator:
     words = 0
     subheads = 0
     in_drawer = False
-    shown = 0   # body lines shown under the current heading
+    shown = 0  # body lines shown under the current heading
     hidden = 0  # body lines collapsed under the current heading
 
     def flush_hidden():
@@ -189,7 +198,9 @@ class OrgRoamNavigator:
         if not (i == 0 and level):  # don't count the node's own heading
           subheads += 1
         words += len(m.group(2).split())
-        out.append((self._strip_links(line.rstrip()), "heading", len(m.group(1))))
+        out.append(
+            (self._strip_links(line.rstrip()), "heading", len(m.group(1)))
+        )
         continue
 
       body = self._strip_links(line).strip()
@@ -295,9 +306,19 @@ class OrgRoamNavigator:
         attr = 0
       put(top + 2 + i, text, attr)
 
-  def load_connections(self, node_id):
-    """Fetch incoming and outgoing ID links for the given node."""
-    connections = []
+  def load_connections(self, node):
+    """Return the MAIN row followed by one row per linked node.
+
+    node is an (id, title, file) tuple. Row types:
+      MAIN   the node itself (always first)
+      BIDIR  it links to this node AND this node links to it
+      OUT    this node links to it
+      IN     it links to this node (backlink)
+    Each linked node appears once, however many links connect the two.
+    Self-links are skipped, since MAIN already represents the node.
+    """
+    node_id, title, file_path = node
+    main = {"type": "MAIN", "id": node_id, "title": title, "file": file_path}
 
     sql_out = """
             SELECT n.id, n.title, n.file
@@ -305,23 +326,45 @@ class OrgRoamNavigator:
             JOIN nodes n ON l.dest = n.id
             WHERE l.source = ? AND l.type = '"id"';
         """
-    for row in self._query(sql_out, (node_id,)):
-      connections.append(
-          {"type": "OUT", "id": row[0], "title": self._clean(row[1]), "file": row[2]}
-      )
-
     sql_in = """
             SELECT n.id, n.title, n.file
             FROM links l
             JOIN nodes n ON l.source = n.id
             WHERE l.dest = ? AND l.type = '"id"';
         """
-    for row in self._query(sql_in, (node_id,)):
-      connections.append(
-          {"type": "IN ", "id": row[0], "title": self._clean(row[1]), "file": row[2]}
-      )
 
-    return connections
+    # _query resets db_ok every call, so remember a failure from either one
+    rows_out = self._query(sql_out, (node_id,))
+    ok = self.db_ok
+    rows_in = self._query(sql_in, (node_id,))
+    self.db_ok = ok and self.db_ok
+
+    linked: dict = {}  # node id -> row dict; guarantees one row per node
+    for row in rows_out:
+      if row[0] == node_id:
+        continue
+      linked[row[0]] = {
+          "type": "OUT",
+          "id": row[0],
+          "title": self._clean(row[1]),
+          "file": row[2],
+      }
+    for row in rows_in:
+      if row[0] == node_id:
+        continue
+      if row[0] in linked:
+        linked[row[0]]["type"] = "BIDIR"
+      else:
+        linked[row[0]] = {
+            "type": "IN",
+            "id": row[0],
+            "title": self._clean(row[1]),
+            "file": row[2],
+        }
+
+    # sorted() is stable, so query order is kept within each group
+    ordered = sorted(linked.values(), key=lambda c: TYPE_RANK[c["type"]])
+    return [main] + ordered
 
   def visit_in_emacs(self, node):
     """Open a node in the running Emacs via emacsclient (non-blocking)."""
@@ -338,9 +381,9 @@ class OrgRoamNavigator:
     # fall back to just opening the file if the ID isn't found.
     elisp = (
         f'(let ((n (org-roam-node-from-id "{esc(node_id)}")))'
-        f' (if n (org-roam-node-visit n)'
+        f" (if n (org-roam-node-visit n)"
         f'   (find-file "{esc(file_path)}"))'
-        f' (select-frame-set-input-focus (selected-frame)))'
+        f" (select-frame-set-input-focus (selected-frame)))"
     )
 
     try:
@@ -367,7 +410,7 @@ class OrgRoamNavigator:
       node = self.lookup_node(prev[0])
       if node:
         self.current_node = node
-        self.connections = self.load_connections(node[0])
+        self.connections = self.load_connections(node)
         self.selected_idx = 0
         self.top_idx = 0
         return
@@ -378,14 +421,14 @@ class OrgRoamNavigator:
 
   def refresh(self):
     """Re-read the current node and its connections, keeping the selection."""
-    if self.current_node is None:
-      return
-    self.preview_cache.clear() 
+    self.preview_cache.clear()
 
-    selected_key = None
+    # Node IDs are unique within the list (self-links are skipped), so the
+    # ID alone identifies the highlighted row even if its label changes
+    # (for example OUT -> BIDIR after you add a backlink in Emacs).
+    selected_id = None
     if self.connections and self.selected_idx < len(self.connections):
-      c = self.connections[self.selected_idx]
-      selected_key = (c["type"], c["id"])
+      selected_id = self.connections[self.selected_idx]["id"]
 
     fresh = self.lookup_node(self.current_node[0])
     if fresh is None:
@@ -403,14 +446,14 @@ class OrgRoamNavigator:
       return
 
     self.current_node = fresh  # picks up renamed title / moved file
-    new_conns = self.load_connections(fresh[0])
+    new_conns = self.load_connections(fresh)
     if not self.db_ok:
       return  # keep the old list rather than blanking it
     self.connections = new_conns
 
-    # Restore selection by (type, id); otherwise clamp to the new length
+    # Restore selection by ID; otherwise clamp to the new length
     for i, c in enumerate(self.connections):
-      if (c["type"], c["id"]) == selected_key:
+      if c["id"] == selected_id:
         self.selected_idx = i
         break
     else:
@@ -420,19 +463,34 @@ class OrgRoamNavigator:
 
     if not self.status:
       self.status = "Refreshed"
-      
+
+  def footer_text(self):
+    """Key hints that depend on what is highlighted."""
+    cur = self.connections[self.selected_idx] if self.connections else None
+    on_main = cur is not None and cur["type"] == "MAIN"
+
+    parts = ["j/k:Move"]
+    if cur is not None and not on_main:
+      parts.append("l:Jump here")  # on MAIN there is nowhere to jump
+    if self.history:
+      parts.append("h:Back")
+    if cur is not None:
+      parts.append("e:Open MAIN in Emacs" if on_main else "e:Open in Emacs")
+    parts += ["r:Refresh", "p:Preview", "q:Quit"]
+    return " " + "  ".join(parts)
+
   def run(self, stdscr):
     curses.curs_set(0)
     curses.use_default_colors()
 
     # Color setup
     curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Selected
-    curses.init_pair(2, curses.COLOR_GREEN, -1)  # Backlinks
-    curses.init_pair(3, curses.COLOR_YELLOW, -1)  # Outlinks
-    curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header
-    curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # Heading level 2
+    curses.init_pair(2, curses.COLOR_GREEN, -1)  # IN (backlinks)
+    curses.init_pair(3, curses.COLOR_YELLOW, -1)  # OUT (outlinks)
+    curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header / MAIN / heading 1
+    curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # BIDIR / heading 2
     curses.init_pair(6, curses.COLOR_CYAN, -1)  # Heading level 3
-    
+
     while True:
       stdscr.clear()
       height, width = stdscr.getmaxyx()
@@ -445,14 +503,17 @@ class OrgRoamNavigator:
 
       stdscr.addstr(1, 0, f" File: {file_path}"[: width - 1], curses.A_DIM)
 
-      conn_count = len(self.connections)
-      curr_pos = (
-          f"{self.selected_idx + 1}/{conn_count}" if conn_count else "0/0"
-      )
+      link_count = max(0, len(self.connections) - 1)  # MAIN is not a link
+      if not self.connections:
+        curr_pos = "-"
+      elif self.selected_idx == 0:
+        curr_pos = "MAIN"
+      else:
+        curr_pos = f"{self.selected_idx}/{link_count}"
       stdscr.addstr(
           2,
           0,
-          f" History Stack: {len(self.history)} | Connections: {conn_count}"
+          f" History Stack: {len(self.history)} | Connections: {link_count}"
           f" (Item {curr_pos})"[: width - 1],
       )
       stdscr.addstr(3, 0, "─" * (width - 1))
@@ -475,14 +536,12 @@ class OrgRoamNavigator:
 
       # --- Render Connections ---
       if not self.connections:
-        stdscr.addstr(
-            5, 2, "< No outgoing links or backlinks >", curses.A_DIM
-        )
+        stdscr.addstr(5, 2, "< Node no longer available >", curses.A_DIM)
       else:
         for idx, conn in enumerate(visible_connections):
           actual_idx = self.top_idx + idx
           row_y = 5 + idx
-          prefix = f"[{conn['type']}] "
+          prefix = f"[{conn['type']:<{LABEL_WIDTH}}] "
           item_str = f"{prefix}{conn['title']}"[: width - 4]
 
           if actual_idx == self.selected_idx:
@@ -490,32 +549,32 @@ class OrgRoamNavigator:
             stdscr.addstr(row_y, 2, item_str.ljust(width - 4))
             stdscr.attroff(curses.color_pair(1))
           else:
-            color = (
-                curses.color_pair(2)
-                if conn["type"] == "IN "
-                else curses.color_pair(3)
-            )
+            color = curses.color_pair(TYPE_PAIRS[conn["type"]])
             stdscr.attron(color)
             stdscr.addstr(row_y, 2, prefix)
             stdscr.attroff(color)
-            stdscr.addstr(row_y, 2 + len(prefix), conn["title"])
+            room = max(0, width - 4 - len(prefix))
+            title_attr = curses.A_BOLD if conn["type"] == "MAIN" else 0
+            stdscr.addstr(
+                row_y, 2 + len(prefix), conn["title"][:room], title_attr
+            )
+
+        if len(self.connections) == 1 and max_items > 1:
+          stdscr.addstr(
+              6, 2, "  (no links to or from this node)", curses.A_DIM
+          )
 
       if preview_rows:
         self.draw_preview(stdscr, height - 1 - preview_rows, preview_rows, width)
-            
+
       # --- Render Footer ---
-      # footer = (
-      #     " [j/k/PgDn/PgUp]: Move | [l/→/Enter]: Jump | [h/←/Backspace]: Back |"
-      #     " [r]: Refresh | [e]: Emacs | [q]: Quit"
-      # )
-      footer = (
-          " j/k:Move  l:Jump  h:Back  r:Refresh  e:Emacs  p:Preview  q:Quit"
-      )
-      
+      footer = self.footer_text()
       if self.status:
         footer = f" {self.status}"
         self.status = ""  # clears on next redraw (i.e. after next keypress)
-      stdscr.addstr(height - 1, 0, footer.ljust(width - 1)[: width - 1], curses.A_REVERSE)
+      stdscr.addstr(
+          height - 1, 0, footer.ljust(width - 1)[: width - 1], curses.A_REVERSE
+      )
 
       stdscr.refresh()
 
@@ -525,19 +584,24 @@ class OrgRoamNavigator:
       if key in (ord("q"), ord("Q")):
         break
 
+      # Open the highlighted row (MAIN or any linked node) in Emacs
       elif key in (ord("e"), ord("E")):
-        node = self.lookup_node(self.current_node[0])
-        if node:
-          self.visit_in_emacs(node)
-        elif self.db_ok:
-          self.status = "Node no longer exists in the database"
+        if not self.connections:
+          self.status = "Nothing to open"
+        else:
+          target = self.connections[self.selected_idx]
+          node = self.lookup_node(target["id"])
+          if node:
+            self.visit_in_emacs(node)
+          elif self.db_ok:
+            self.status = "Node no longer exists in the database"
 
       elif key in (ord("p"), ord("P")):
         self.show_preview = not self.show_preview
-          
+
       elif key in (ord("r"), ord("R")):
         self.refresh()
-        
+
       # Motion Down (Single Line)
       elif key in (curses.KEY_DOWN, ord("j")):
         if self.connections and self.selected_idx < len(self.connections) - 1:
@@ -564,19 +628,23 @@ class OrgRoamNavigator:
       elif key in (curses.KEY_RIGHT, ord("l"), 10, 13):
         if self.connections:
           target = self.connections[self.selected_idx]
-          self.history.append(self.current_node)
-          self.current_node = (
-              target["id"],
-              target["title"],
-              target["file"],
-          )
-          self.connections = self.load_connections(self.current_node[0])
-          self.selected_idx = 0
-          self.top_idx = 0
+          if target["type"] == "MAIN":
+            self.status = "Already at this node"
+          else:
+            self.history.append(self.current_node)
+            self.current_node = (
+                target["id"],
+                target["title"],
+                target["file"],
+            )
+            self.connections = self.load_connections(self.current_node)
+            self.selected_idx = 0  # land on MAIN of the new node
+            self.top_idx = 0
 
       # Motion Left / Backspace (Pop history stack)
       elif key in (curses.KEY_LEFT, ord("h"), 8, 127, curses.KEY_BACKSPACE):
-          self.go_back()
+        self.go_back()
+
 
 def main():
   parser = argparse.ArgumentParser(
@@ -600,6 +668,7 @@ def main():
 
   nav = OrgRoamNavigator(resolve_db_path(args.db), args.title, args.node_id)
   curses.wrapper(nav.run)
+
 
 if __name__ == "__main__":
   main()

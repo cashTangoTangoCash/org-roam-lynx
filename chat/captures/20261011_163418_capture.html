@@ -1,0 +1,27 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 18</h1>
+<p><strong><a href="20261011_163411_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>I'll write the whole file this time rather than a patch. Several areas change at once (<code>load_connections</code>, the render block, the key handlers, <code>refresh</code>), and a full file is harder to misapply. The shell script needs no changes.Next I'll test it against a fake org-roam database, since I can't run your real one. The test covers the link-merging logic and a scripted drive of the curses UI.The updated <code>org_roam_lynx_browse_graph.py</code> is done, and the shell script needs no changes. I tested it against a fake org-roam database, not your real one. The link logic checked out, and a scripted run of the curses UI (move, jump, back, refresh, preview toggle) exited cleanly with no tracebacks. The <code>e</code> key without a running Emacs server only checked that nothing crashes.</p>
+<p>Before you replace your copy, run <code>diff -u your_current.py new.py | less</code>, so you can see exactly what changed.</p>
+<p><strong>What's new</strong></p>
+<ul>
+<li><strong>MAIN row:</strong> the current node is always the first row, highlighted on arrival, with its contents in the preview pane. After a jump or a back, you land on the new MAIN row.</li>
+<li><strong>BIDIR:</strong> a node that links both ways gets one <code>[BIDIR]</code> row. Duplicate links to the same node also collapse into one row.</li>
+<li><strong>Jump (<code>l</code>) on MAIN:</strong> shows &quot;Already at this node&quot; in the footer. Back works as before.</li>
+<li><strong><code>e</code> opens the highlighted row</strong>, MAIN or any other, so there's no separate <code>E</code>.</li>
+<li><strong>Footer hints change with the highlight:</strong> on MAIN there's no <code>l:Jump here</code>, and <code>e</code> reads <code>e:Open MAIN in Emacs</code>. <code>h:Back</code> only appears when there's history to walk back through.</li>
+</ul>
+<p><strong>Decisions I made where you hadn't specified</strong></p>
+<ul>
+<li><strong>Order:</strong> below MAIN, rows sort BIDIR, then OUT, then IN. The order within each group is the database's. The sort order is a one-line change in <code>TYPE_RANK</code> if you'd rather have something else.</li>
+<li><strong>Self-links</strong> (a node linking to itself) are skipped, since MAIN already represents the node.</li>
+<li><strong>Header counts:</strong> &quot;Connections&quot; no longer counts the MAIN row, and the item position reads <code>MAIN</code> or <code>3/5</code>.</li>
+<li><strong>Refresh keeps your selection by node ID</strong> instead of by label. A row that changes from OUT to BIDIR after you add a backlink in Emacs stays highlighted.</li>
+<li><strong>Small extras:</strong> I fixed a possible curses crash when a long title overflowed on a narrow terminal. A DB error in either link query is now noticed, where the old code could miss the first one's failure. A node with no links shows a dim &quot;(no links to or from this node)&quot; under MAIN.</li>
+</ul>
+<p><strong>Possible next step:</strong> when you go Back, highlight the node you just came from instead of MAIN. It makes retracing a path in Lynx or Midnight Commander feel natural, but it's your call, since you asked for MAIN.</p>
+<p>The README now has three items out of date. The key table needs <code>e</code> described as opening the highlighted node, the list needs MAIN and BIDIR explained, and the &quot;open the highlighted node&quot; roadmap item can go. Want me to regenerate it?</p>
+<hr />
+<p><strong><a href="20261011_163411_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_163418_capture.md&quot;)</p>

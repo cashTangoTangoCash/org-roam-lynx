@@ -2375,3 +2375,124 @@ When you've restored the block, let me know whether the browser comes up. If it 
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261008_170251_capture.md")
 
 ---
+
+# PROMPT 18
+now I would like to make maybe a bigger change (maybe it's not that big).  to get there, let's start on the same page - I will paste in the .sh and the .py scripts in their current form.  the code is also at https://github.com/cashTangoTangoCash/org-roam-lynx but it will be constantly updated.  shell script is:
+
+ #!/usr/bin/env bash
+
+# Paths: ORG_ROAM_DB wins; otherwise XDG location, then ~/.emacs.d
+if [[ -n "$ORG_ROAM_DB" ]]; then
+    DB_PATH="$ORG_ROAM_DB"
+else
+    DB_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/emacs/org-roam.db"
+    [[ ! -f "$DB_PATH" ]] && DB_PATH="$HOME/.emacs.d/org-roam.db"
+fi
+PYTHON_NAV_SCRIPT="${ROAM_LYNX_PY:-$HOME/.local/bin/org_roam_lynx_browse_graph.py}"
+
+# --- HELP HANDLERS ---
+show_brief_help() {
+    cat << 'EOF'
+Usage: org-roam-lynx-find-starting-node-then-browse-graph.sh [OPTION] [SEARCH_TERM]
+
+Search Org-roam nodes/aliases using fzf and open the selection in the terminal Lynx-style node browser.
+
+Options:
+  -h, --help            Show this brief command-line help message and exit.
+
+Environment:
+  ORG_ROAM_DB           Path to org-roam.db (default: ~/.config/emacs/org-roam.db,
+                        then ~/.emacs.d/org-roam.db)
+  ROAM_LYNX_PY          Path to org_roam_lynx_browse_graph.py
+
+Examples:
+  <script>              Interactive fzf search through all notes (sorted by mtime).
+  <script> bashrc       Pre-filtered fzf search for "bashrc" before entering browser.
+EOF
+}
+
+case "$1" in
+    -h|--help) show_brief_help; exit 0 ;;
+esac
+
+# Validations
+[[ ! -f "$DB_PATH" ]] && { echo "Error: Database not found at $DB_PATH" >&2; exit 1; }
+[[ ! -f "$PYTHON_NAV_SCRIPT" ]] && { echo "Error: Python navigator not found at $PYTHON_NAV_SCRIPT" >&2; exit 1; }
+
+SEARCH_TERM="$1"
+
+# Columns: 1=title, 2=aliases, 3=file, 4=id (hidden in fzf, used for handoff)
+BASE_SQL="SELECT nodes.title, COALESCE(GROUP_CONCAT(aliases.alias, ' | '), '') AS alias_list, nodes.file, nodes.id FROM nodes JOIN files ON nodes.file = files.file LEFT JOIN aliases ON nodes.id = aliases.node_id WHERE nodes.title IS NOT NULL AND nodes.title != '' GROUP BY nodes.id"
+
+if [[ -z "$SEARCH_TERM" ]]; then
+    QUERY="$BASE_SQL ORDER BY files.mtime DESC;"
+    RESULTS=$(sqlite3 -separator $'\t' "$DB_PATH" "$QUERY" | tr -d '"')
+else
+    SAFE_TERM="${SEARCH_TERM//\'/\'\'}"
+    # Search both primary title AND alias columns
+    QUERY="$BASE_SQL HAVING nodes.title LIKE '%$SAFE_TERM%' OR alias_list LIKE '%$SAFE_TERM%' ORDER BY files.mtime DESC;"
+    RESULTS=$(sqlite3 -separator $'\t' "$DB_PATH" "$QUERY" | tr -d '"')
+fi
+
+MATCH_COUNT=$(echo "$RESULTS" | sed '/^$/d' | wc -l)
+
+if [[ $MATCH_COUNT -eq 0 ]]; then
+    echo "No Org-roam nodes or aliases matching: \"$SEARCH_TERM\"" >&2
+    exit 1
+elif [[ $MATCH_COUNT -eq 1 ]]; then
+    SELECTION="$RESULTS"
+else
+    # fzf shows columns 1-2 only; live file preview comes from column 3
+    SELECTION=$(echo "$RESULTS" \
+        | fzf --exact \
+              --delimiter=$'\t' \
+              --with-nth=1,2 \
+              --tiebreak=index \
+              ${SEARCH_TERM:+--query="$SEARCH_TERM"} \
+              --preview 'head -n 30 {3}' \
+              --preview-window=right:50%:wrap)
+fi
+
+if [[ -n "$SELECTION" ]]; then
+    NODE_ID=$(echo "$SELECTION" | cut -f4)
+
+    # Hand off by ID (unambiguous) and pass the DB path so both scripts agree
+    python3 "$PYTHON_NAV_SCRIPT" --db "$DB_PATH" --id "$NODE_ID"
+fi
+
+and python script is:
+
+(PASTED and appears as I think a Claude 'artifact' if that is still the right term).
+
+let me try to describe a desired change.  so, we enter the python script.  we are 'at' a 'main node.'  but, focus is on a first link in a list of links.  that first link is shown in a preview.  so right away, we have kind of a confusing behavior for users - a user might rightly expect to see a preview of the 'main node.'  so, it seems like we could put the main node in the list of links, and preface it with [MAIN] or some other more meaningful word.  the highlight would be on MAIN and the preview would show the contents of MAIN.  the menu of actions we see at the bottom would have MAIN-specific meanings if the highlight is on MAIN.  Move j/k works as usual.  Jump does nothing - we are already at MAIN.  I think Back works as normal if there is History to walk back through.  Now, we can unify the e:Emacs command - we can hit e on any node in the list and visit any node in the list in emacs.  the old behavior was: hitting e will only visit MAIN and the 'roadmap' called for E to visit a node in the list - that is too many e/E's.  One more related change: if a link is both OUT and IN, it should be labeled BIDIR and only appear once in the list.  that will shorten up the list a bit.  All of this is 'easy for me to say, hard for you to do' - I hope not!
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_163411_capture.md")
+
+---
+
+# RESPONSE 18
+I'll write the whole file this time rather than a patch. Several areas change at once (`load_connections`, the render block, the key handlers, `refresh`), and a full file is harder to misapply. The shell script needs no changes.Next I'll test it against a fake org-roam database, since I can't run your real one. The test covers the link-merging logic and a scripted drive of the curses UI.The updated `org_roam_lynx_browse_graph.py` is done, and the shell script needs no changes. I tested it against a fake org-roam database, not your real one. The link logic checked out, and a scripted run of the curses UI (move, jump, back, refresh, preview toggle) exited cleanly with no tracebacks. The `e` key without a running Emacs server only checked that nothing crashes.
+
+Before you replace your copy, run `diff -u your_current.py new.py | less`, so you can see exactly what changed.
+
+**What's new**
+- **MAIN row:** the current node is always the first row, highlighted on arrival, with its contents in the preview pane. After a jump or a back, you land on the new MAIN row.
+- **BIDIR:** a node that links both ways gets one `[BIDIR]` row. Duplicate links to the same node also collapse into one row.
+- **Jump (`l`) on MAIN:** shows "Already at this node" in the footer. Back works as before.
+- **`e` opens the highlighted row**, MAIN or any other, so there's no separate `E`.
+- **Footer hints change with the highlight:** on MAIN there's no `l:Jump here`, and `e` reads `e:Open MAIN in Emacs`. `h:Back` only appears when there's history to walk back through.
+
+**Decisions I made where you hadn't specified**
+- **Order:** below MAIN, rows sort BIDIR, then OUT, then IN. The order within each group is the database's. The sort order is a one-line change in `TYPE_RANK` if you'd rather have something else.
+- **Self-links** (a node linking to itself) are skipped, since MAIN already represents the node.
+- **Header counts:** "Connections" no longer counts the MAIN row, and the item position reads `MAIN` or `3/5`.
+- **Refresh keeps your selection by node ID** instead of by label. A row that changes from OUT to BIDIR after you add a backlink in Emacs stays highlighted.
+- **Small extras:** I fixed a possible curses crash when a long title overflowed on a narrow terminal. A DB error in either link query is now noticed, where the old code could miss the first one's failure. A node with no links shows a dim "(no links to or from this node)" under MAIN.
+
+**Possible next step:** when you go Back, highlight the node you just came from instead of MAIN. It makes retracing a path in Lynx or Midnight Commander feel natural, but it's your call, since you asked for MAIN.
+
+The README now has three items out of date. The key table needs `e` described as opening the highlighted node, the list needs MAIN and BIDIR explained, and the "open the highlighted node" roadmap item can go. Want me to regenerate it?
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_163418_capture.md")
+
+---
