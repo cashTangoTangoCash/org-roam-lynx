@@ -1,0 +1,28 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 25</h1>
+<p><strong><a href="20261012_174057_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>I'll edit the README in place, so everything you've already approved stays as it is.The README is updated. One more check: the help feature opens at the &quot;Reading the screen&quot; heading, so I'll make sure the edits didn't break that anchor or the new internal link.I've updated <code>README.md</code>. I edited it in place, so your GIF, screenshots, Contributing, &quot;How it was Developed&quot;, and License sections are untouched. I also checked that pandoc still renders every heading, including the &quot;Reading the screen&quot; anchor that the help opens at.</p>
+<p><strong>Insert links</strong></p>
+<ul>
+<li><strong>New section:</strong> &quot;Inserting links into Emacs&quot; explains <code>i</code> and <code>I</code>, the use case (pasting the same link in several places), and the details: which buffer receives the link, no focus change, the footer confirmation, read-only buffers, one undo, and pressing <code>r</code> after Emacs saves.</li>
+<li><strong>Elsewhere:</strong> there's a Features bullet, a mention in the &quot;Plays well with Emacs&quot; bullet in Why?, and a Known limitations note to check the footer the first time.</li>
+</ul>
+<p><strong>Built-in help</strong></p>
+<ul>
+<li><strong>New section:</strong> &quot;Built-in help&quot; covers <code>?</code> and <code>F1</code> (and why not <code>h</code>), the pandoc-to-eww flow, the temp file location, how the README is found, images, and the plain-text fallback.</li>
+<li><strong>Elsewhere:</strong> there's a Features bullet and a limitation about needing Emacs.</li>
+</ul>
+<p><strong>Updated throughout</strong></p>
+<ul>
+<li><strong>Keys table:</strong> it has rows for <code>i</code>, <code>I</code>, and <code>?</code>/<code>F1</code>, and the footer-hints sentence says <code>l:Jump</code> to match the code.</li>
+<li><strong>Requirements:</strong> the Emacs line now covers <code>e</code>, <code>i</code>/<code>I</code>, and <code>?</code>, and pandoc is listed as optional.</li>
+<li><strong>Installation:</strong> symlinks are now the recommended install, because the help finds the README next to the real script. Copy installs get a note about <code>~/.local/share/org-roam-lynx/</code> or <code>ROAM_LYNX_README</code>. I added a <code>chmod +x</code> line, since the symlinks point at repo files that need the executable bit.</li>
+<li><strong>Configuration:</strong> the variables table has <code>ROAM_LYNX_README</code>, and the tweaking table has <code>HELP_ANCHOR</code>.</li>
+<li><strong>How it works:</strong> it now says inserting links and showing help use the same <code>emacsclient --eval</code> mechanism.</li>
+</ul>
+<p>The help opens at the &quot;Reading the screen&quot; heading, and <code>HELP_ANCHOR</code> in the script has to match its name. If you ever rename that heading, change <code>HELP_ANCHOR</code> too. The README's tweaking table says so as well.</p>
+<p>The README covers every feature now. A screenshot of the came-from highlight, or a short GIF that shows <code>i</code> landing a link in Emacs and <code>?</code> opening help, would show the newer features better than prose. The current GIF predates the MAIN row.</p>
+<hr />
+<p><strong><a href="20261012_174057_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_174100_capture.md&quot;)</p>

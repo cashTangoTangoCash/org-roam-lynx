@@ -31,7 +31,7 @@ org-roam-lynx takes a different approach:
 - **Lightweight.** It's a single Python script that reads Org-roam's SQLite database directly. It uses only the Python standard library, and each keypress runs a small query.
 - **Keyboard-first.** Everything is one keystroke, with vi-style keys and arrow keys both supported.
 - **Link-centric, not graph-centric.** You always see one node and its direct neighbors: where it links to, what links back to it, and what does both. That is usually what you want when you're thinking "where does this lead?"
-- **Plays well with Emacs.** Found the node you were looking for? Press `e` and it opens in your running Emacs. The browser stays open so you can keep exploring.
+- **Plays well with Emacs.** Found the node you were looking for? Press `e` and it opens in your running Emacs, or press `i` to drop a link to it into whatever you're writing. The browser stays open so you can keep exploring.
 
 It's not a replacement for org-roam-ui's big-picture view. It's the fast lane for when you just want to get around.
 
@@ -42,6 +42,8 @@ It's not a replacement for org-roam-ui's big-picture view. It's the fast lane fo
 - **Preview pane** for the highlighted row, with Org-aware styling: property drawers and `#+` keywords hidden, headings colored by level, long sections collapsed
 - **Preview header** per node: its title, word count, subheading count, how many nodes it links to and from, and when it was created and last modified. Nodes with very little content are flagged as **stubs**, so you can tell at a glance whether a node is worth opening
 - **Open in Emacs** via `emacsclient` without leaving the browser. `e` works on whichever row is highlighted, including MAIN
+- **Insert links into Emacs**: `i` inserts an Org link to the highlighted node at point in Emacs, followed by a space; `I` follows it with a newline. A quick way to paste the same link in several places without calling `org-roam-node-insert` each time
+- **Built-in help**: press `?` and this README opens in Emacs, rendered to HTML with pandoc and shown in eww. No separate help page to maintain
 - **Refresh** after you've edited in Emacs, with your selection preserved
 - **Fuzzy search front end** that searches titles and aliases with fzf, sorts by most recently modified, and hands the chosen node to the browser **by ID**, so duplicate or overlapping titles are never ambiguous
 - **Read-only**: the database is opened in read-only mode, so it can't interfere with Emacs
@@ -51,7 +53,8 @@ It's not a replacement for org-roam-ui's big-picture view. It's the fast lane fo
 - Python 3.9+ (uses only the standard library: `curses`, `sqlite3`)
 - Org-roam v2 with a populated database
 - For the search front end: `bash`, [`fzf`](https://github.com/junegunn/fzf), and the `sqlite3` command-line tool
-- For the `e` key: a running Emacs server (`M-x server-start`, or `(server-start)` in your init file) and `emacsclient` on your `PATH`
+- For the `e`, `i`/`I`, and `?` keys: a running Emacs server (`M-x server-start`, or `(server-start)` in your init file) and `emacsclient` on your `PATH`. Browsing itself works without Emacs
+- Optional: [`pandoc`](https://pandoc.org/) for the built-in help. Without it, `?` opens the README as plain text
 - Optional: on Linux, GNU `stat` (part of coreutils) lets the preview show a file's creation date when its filename has no timestamp
 - Linux or macOS (Windows lacks Python's `curses` by default)
 
@@ -61,10 +64,13 @@ It's not a replacement for org-roam-ui's big-picture view. It's the fast lane fo
 git clone https://github.com/cashTangoTangoCash/org-roam-lynx.git
 cd org-roam-lynx
 
-# Put the files somewhere on your PATH
-install -m 755 org_roam_lynx_browse_graph.py ~/.local/bin/
-install -m 755 org-roam-lynx-find-starting-node-then-browse-graph.sh ~/.local/bin/
+# Symlink the files onto your PATH
+chmod +x org_roam_lynx_browse_graph.py org-roam-lynx-find-starting-node-then-browse-graph.sh
+ln -s "$PWD/org_roam_lynx_browse_graph.py" ~/.local/bin/
+ln -s "$PWD/org-roam-lynx-find-starting-node-then-browse-graph.sh" ~/.local/bin/
 ```
+
+Symlinks are the recommended install: the built-in help finds `README.md` (and the screenshots in `docs/`) next to the real script, and `git pull` updates everything at once. If you would rather copy the files (for example with `install -m 755`), also copy `README.md` to `~/.local/share/org-roam-lynx/` or point `ROAM_LYNX_README` at it, or the help won't find it.
 
 Make sure `~/.local/bin` is on your `PATH`. The script names are long on purpose (they say what they do), so a short alias is handy. Add something like this to your shell config:
 
@@ -139,11 +145,43 @@ Where the dates come from (Org-roam's database doesn't record either one):
 | `l`, `→`, `Enter` | Jump to the highlighted node (does nothing on MAIN, since you're already there) |
 | `h`, `←`, `Backspace` | Go back through your history |
 | `e` | Open the highlighted row (MAIN or any linked node) in Emacs |
+| `i` | Insert an Org link to the highlighted row at point in Emacs, followed by a space |
+| `I` | Same, followed by a newline |
+| `?`, `F1` | Open the built-in help (this README) in Emacs. `h` is already Back, so help lives on `?` |
 | `r` | Refresh from the database |
 | `p` | Toggle the preview pane |
 | `q` | Quit |
 
-The hints along the bottom of the screen change with the highlighted row: for example, `l:Jump here` isn't offered on MAIN, and `h:Back` only appears when there is history to go back through.
+The hints along the bottom of the screen change with the highlighted row: for example, `l:Jump` isn't offered on MAIN, and `h:Back` only appears when there is history to go back through.
+
+## Inserting links into Emacs
+
+Press `i` on any row (MAIN, a link, or a backlink) and an Org link to that node is inserted at point in Emacs, followed by a space: `[[id:...][Node title]] `. `I` does the same and ends with a newline instead.
+
+This is for adding links quickly. Visit the note you are writing in Emacs and put point where the first link should go. Then move the cursor in the browser to a node and press `i`. Repeat for as many nodes as you like: each link lands right after the previous one, and you never leave the terminal or wait on `org-roam-node-insert`.
+
+A few details:
+
+- The link goes into the buffer shown in Emacs's selected window, which is the one you were last working in, at point. If a minibuffer prompt is open, it goes to the window you came from.
+- Emacs is not raised, so you can keep going from the terminal. The footer confirms which buffer received the link, for example `Inserted link to "Alpha" in Emacs buffer notes.org`.
+- Emacs builds the link itself (with `org-link-make-string`, the function org-roam's own insert command uses), using the title org-roam has there. Titles with quotes, non-ASCII characters, or brackets are handled the standard Org way.
+- If the buffer is read-only, nothing is inserted and the footer shows Emacs's error. Each insertion is a single edit, so one undo removes it.
+- A new link isn't in org-roam's database until Emacs saves that buffer and syncs. Press `r` in the browser afterward to see it as a new row.
+- If the built-in help page is the selected window in Emacs, press `q` there first, since it's read-only.
+
+## Built-in help
+
+Press `?` (or `F1`) and this README opens in Emacs. It is converted to HTML with pandoc and shown with eww, and it opens at the "Reading the screen" heading so the legend and key table come first. Scroll up for the rest. Press `q` in eww to close it and return to your previous buffer.
+
+The help *is* the README, so there is no second page to keep in sync.
+
+A few details:
+
+- The generated page is written as `org-roam-lynx-help.html` in a private per-user directory (`$XDG_RUNTIME_DIR/org-roam-lynx/`, else `/tmp/org-roam-lynx-<uid>/`) and is overwritten each time.
+- The README is found at `$ROAM_LYNX_README`, then next to the script (symlinks are followed), then at `~/.local/share/org-roam-lynx/README.md`.
+- Images in the README resolve against the README's own folder, so the screenshots show up if `docs/` is next to it.
+- Without pandoc, the README opens read-only as plain text instead.
+- Like `e`, help needs a running Emacs server.
 
 ## Configuration
 
@@ -164,6 +202,7 @@ export ORG_ROAM_DB="$HOME/path/to/org-roam.db"
 | --- | --- |
 | `ORG_ROAM_DB` | Path to `org-roam.db` |
 | `ROAM_LYNX_PY` | Path to `org_roam_lynx_browse_graph.py` (used by the launcher) |
+| `ROAM_LYNX_README` | Path to `README.md` for the built-in help (optional; see [Built-in help](#built-in-help)) |
 
 ### Tweaking the look
 
@@ -177,10 +216,11 @@ A few constants near the top of `org_roam_lynx_browse_graph.py` are meant to be 
 | `MAX_BODY_LINES` | Body lines shown under each heading in the preview |
 | `TYPE_RANK` | Order of the list rows below MAIN (default: BIDIR, OUT, IN) |
 | `CAME_FROM_PAIR`, `CAME_FROM_GLYPH` | Color pair and margin arrow for the came-from reminder |
+| `HELP_ANCHOR` | README heading the help opens at (default `reading-the-screen`). If you rename that heading, change this to match: lowercase, with hyphens for spaces |
 
 ## How it works
 
-Org-roam keeps an index of your notes in a SQLite database. org-roam-lynx queries the `nodes` and `links` tables for the current node's neighbors, and reads the node's file from disk for the preview (cached by file modification time, so revisiting is free). Opening in Emacs calls `org-roam-node-visit` through `emacsclient --eval`, which lands on the right heading even for nodes that aren't whole files.
+Org-roam keeps an index of your notes in a SQLite database. org-roam-lynx queries the `nodes` and `links` tables for the current node's neighbors, and reads the node's file from disk for the preview (cached by file modification time, so revisiting is free). Opening in Emacs calls `org-roam-node-visit` through `emacsclient --eval`, which lands on the right heading even for nodes that aren't whole files. Inserting links and showing help work the same way: a short piece of Emacs Lisp sent through `emacsclient --eval`.
 
 Because it reads the database rather than your files, it's only as current as Org-roam's index. Save in Emacs (with `org-roam-db-autosync-mode` on) and press `r` to see changes.
 
@@ -190,6 +230,8 @@ Because it reads the database rather than your files, it's only as current as Or
 - The preview is a lightweight approximation of Org's appearance, not a full renderer.
 - Heading-level nodes assume UTF-8 files with LF line endings when locating their text.
 - Dates in the preview belong to the file, so every heading-level node in a file shows the same dates. The created date can be wrong for files whose names have no timestamp and whose creation time was reset by copying or syncing.
+- `i`/`I` insert into whatever buffer Emacs's selected window is showing, so glance at the footer message the first time to confirm the link landed where you meant.
+- The built-in help needs Emacs, and ideally pandoc. Browsing works without them.
 - In the fzf front end, double-quote characters are stripped from displayed titles (the browser itself shows them correctly, since it looks nodes up by ID).
 
 ## Roadmap ideas

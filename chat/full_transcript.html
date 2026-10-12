@@ -2354,3 +2354,36 @@ Now the code.The code compiles and the footer adapts to terminal width. Now the 
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_173231_capture.md")
 
 ---
+
+# PROMPT 25
+README.md needs the insert org link functions, as well as the built-in help function in the python script.  please update it.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_174057_capture.md")
+
+---
+
+# RESPONSE 25
+I'll edit the README in place, so everything you've already approved stays as it is.The README is updated. One more check: the help feature opens at the "Reading the screen" heading, so I'll make sure the edits didn't break that anchor or the new internal link.I've updated `README.md`. I edited it in place, so your GIF, screenshots, Contributing, "How it was Developed", and License sections are untouched. I also checked that pandoc still renders every heading, including the "Reading the screen" anchor that the help opens at.
+
+**Insert links**
+- **New section:** "Inserting links into Emacs" explains `i` and `I`, the use case (pasting the same link in several places), and the details: which buffer receives the link, no focus change, the footer confirmation, read-only buffers, one undo, and pressing `r` after Emacs saves.
+- **Elsewhere:** there's a Features bullet, a mention in the "Plays well with Emacs" bullet in Why?, and a Known limitations note to check the footer the first time.
+
+**Built-in help**
+- **New section:** "Built-in help" covers `?` and `F1` (and why not `h`), the pandoc-to-eww flow, the temp file location, how the README is found, images, and the plain-text fallback.
+- **Elsewhere:** there's a Features bullet and a limitation about needing Emacs.
+
+**Updated throughout**
+- **Keys table:** it has rows for `i`, `I`, and `?`/`F1`, and the footer-hints sentence says `l:Jump` to match the code.
+- **Requirements:** the Emacs line now covers `e`, `i`/`I`, and `?`, and pandoc is listed as optional.
+- **Installation:** symlinks are now the recommended install, because the help finds the README next to the real script. Copy installs get a note about `~/.local/share/org-roam-lynx/` or `ROAM_LYNX_README`. I added a `chmod +x` line, since the symlinks point at repo files that need the executable bit.
+- **Configuration:** the variables table has `ROAM_LYNX_README`, and the tweaking table has `HELP_ANCHOR`.
+- **How it works:** it now says inserting links and showing help use the same `emacsclient --eval` mechanism.
+
+The help opens at the "Reading the screen" heading, and `HELP_ANCHOR` in the script has to match its name. If you ever rename that heading, change `HELP_ANCHOR` too. The README's tweaking table says so as well.
+
+The README covers every feature now. A screenshot of the came-from highlight, or a short GIF that shows `i` landing a link in Emacs and `?` opening help, would show the newer features better than prose. The current GIF predates the MAIN row.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_174100_capture.md")
+
+---
