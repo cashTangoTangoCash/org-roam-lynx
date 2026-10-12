@@ -1,0 +1,38 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 24</h1>
+<p><strong><a href="20261012_173214_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>Before the code, here's my opinion. The scheme isn't wacky. Keeping one source of truth beats maintaining a second help page, and for a project that already depends on Emacs for <code>e</code> and <code>i</code>, using eww as the viewer is a defensible choice. Four things need handling, though:</p>
+<ol>
+<li><strong><code>h</code> is already Back.</strong> If <code>h</code> opened help, vi-style users would lose Back, so I'll bind help to <code>?</code> (as in <code>less</code>) and <code>F1</code> (as in Midnight Commander).</li>
+<li><strong>The installed script has no README.</strong> Your install step copies only the <code>.py</code> file into <code>~/.local/bin</code>. I'll look for the README next to the real script (following symlinks), then at <code>$ROAM_LYNX_README</code>, then in <code>~/.local/share/org-roam-lynx/</code>. That makes symlink installs work best.</li>
+<li><strong>Relative image paths break once the HTML sits in a temp directory.</strong> I'll add a <code>&lt;base&gt;</code> tag pointing at the README's folder.</li>
+<li><strong>pandoc is a new dependency.</strong> Without it, I'll fall back to opening <code>README.md</code> as plain text in Emacs rather than failing.</li>
+</ol>
+<p>Now the code.The code compiles and the footer adapts to terminal width. Now the real test, which needs pandoc and the Emacs daemon.pandoc was already installed. Now a full test: a fake repo layout with a symlinked install, the real daemon, and the actual <code>?</code> key in the terminal UI.Help is built into <code>org_roam_lynx_browse_graph.py</code>. It works through a symlinked install with a real Emacs daemon and pandoc, and through the actual terminal UI. The earlier behaviors (<code>i</code>/<code>I</code>, came-from marker, preview, all terminal sizes) still pass.</p>
+<p><strong>The key is <code>?</code> (or <code>F1</code>), not <code>h</code>.</strong> <code>h</code> is Back, and vi-style users would lose it. <code>?</code> is the <code>less</code> convention and <code>F1</code> matches Midnight Commander. I confirmed <code>h</code> still goes Back. The footer now shows <code>?:Help</code>, and on narrow terminals it switches to single-space separators to fit 80 columns.</p>
+<p><strong>What <code>?</code> does</strong></p>
+<ul>
+<li><strong>Conversion:</strong> it converts <code>README.md</code> to HTML with pandoc, as GitHub-flavored Markdown.</li>
+<li><strong>Where it's written:</strong> it saves the HTML as <code>org-roam-lynx-help.html</code> in a private per-user directory (<code>$XDG_RUNTIME_DIR</code>, else <code>/tmp/org-roam-lynx-&lt;uid&gt;</code>). It overwrites that file each time, so nothing piles up.</li>
+<li><strong>Opening it:</strong> it opens the page in eww and raises the Emacs frame. It opens at the &quot;Reading the screen&quot; heading rather than the top, so the legend and key table are first. Scroll up for the rest.</li>
+<li><strong>Closing it:</strong> press <code>q</code> in eww to return to your previous buffer.</li>
+</ul>
+<p><strong>What I added to make your scheme hold up</strong></p>
+<ul>
+<li><strong>Finding the README:</strong> it looks next to the real script (following symlinks), then at <code>$ROAM_LYNX_README</code>, then in <code>~/.local/share/org-roam-lynx/</code>. Your current install copies only the <code>.py</code> file into <code>~/.local/bin</code>, so help would say &quot;README.md not found&quot;. Installing by symlink fixes that, and <code>git pull</code> then updates the script too: <code>ln -s &quot;$PWD/org_roam_lynx_browse_graph.py&quot; ~/.local/bin/</code>.</li>
+<li><strong>Images:</strong> the generated HTML sits in a temp directory, so I added a <code>&lt;base&gt;</code> tag pointing at the README's folder. I traced Emacs's URL expansion, and your GIF and screenshots resolve to <code>docs/...</code> in the repo.</li>
+<li><strong>No pandoc:</strong> it opens <code>README.md</code> as read-only text in Emacs instead of failing.</li>
+<li><strong>Other failures:</strong> a missing README, a stopped Emacs server, and a hostile symlink planted where the temp directory should be each give a clear one-line message.</li>
+</ul>
+<p><strong>Things to know</strong></p>
+<ul>
+<li><strong>Insert after help:</strong> while the eww help buffer is the selected window in Emacs, <code>i</code>/<code>I</code> will fail with &quot;Buffer is read-only&quot;. Press <code>q</code> in eww first.</li>
+<li><strong>Heading name:</strong> the landing spot depends on the README heading &quot;Reading the screen&quot;. If you rename it, change <code>HELP_ANCHOR</code> near the top of the script.</li>
+<li><strong>Without Emacs:</strong> browsing still works, but <code>?</code> shows an error, since help needs Emacs. A tiny in-terminal key list would help there, but it would duplicate content, so I left it out.</li>
+<li><strong>Not tested:</strong> I couldn't see images render, because the sandbox Emacs has no GUI. I confirmed the paths resolve, but whether your GUI eww shows the GIF and JPGs is worth a look.</li>
+</ul>
+<p><strong>Housekeeping:</strong> the README now needs <code>?</code>/<code>F1</code> in the keys table, pandoc under optional requirements, <code>ROAM_LYNX_README</code> in the config table, and the symlink install instructions. Want me to regenerate it?</p>
+<hr />
+<p><strong><a href="20261012_173214_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_173231_capture.md&quot;)</p>

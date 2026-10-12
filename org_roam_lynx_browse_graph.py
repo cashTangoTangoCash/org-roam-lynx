@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import curses
+import html
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +51,11 @@ DRAWER_START_RE = re.compile(r"^\s*:[A-Za-z_-]+:\s*$")
 DRAWER_END_RE = re.compile(r"^\s*:END:\s*$", re.IGNORECASE)
 LINK_RE = re.compile(r"\[\[[^\]]*\]\[([^\]]*)\]\]|\[\[([^\]]*)\]\]")
 
+# Built-in help = README.md rendered to HTML (pandoc) and shown in Emacs (eww)
+HELP_HTML_NAME = "org-roam-lynx-help.html"  # unique, so it can't clash with
+# some other README.html. Overwritten each time help is opened.
+HELP_ANCHOR = "reading-the-screen"  # README heading to open at ("" = the top)
+
 DATE_FORMAT = "%m/%d/%Y"  # 10/11/2026. For 2026-10-11 use "%Y-%m-%d"
 # Timestamp at the start of a filename: 20260311123456-slug.org (org-roam's
 # default), 20260311-slug.org, or 2026-03-11.org (org-roam-dailies)
@@ -59,6 +67,40 @@ FILENAME_STAMP_RE = re.compile(
 def elisp_escape(s):
   """Escape a Python string for use inside an elisp "double-quoted" string."""
   return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def find_readme():
+  """Locate README.md: $ROAM_LYNX_README, next to this script, then XDG data.
+
+  resolve() follows symlinks, so a symlink in ~/.local/bin that points into a
+  git clone finds the clone's README (and its docs/ images).
+  """
+  candidates = []
+  env = os.environ.get("ROAM_LYNX_README")
+  if env:
+    candidates.append(Path(env).expanduser())
+  candidates.append(Path(__file__).resolve().parent / "README.md")
+  data = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+  candidates.append(Path(data) / "org-roam-lynx" / "README.md")
+  for c in candidates:
+    if c.is_file():
+      return c.resolve()
+  return None
+
+
+def help_dir():
+  """A private per-user directory for the generated help page."""
+  runtime = os.environ.get("XDG_RUNTIME_DIR")
+  if runtime and os.path.isdir(runtime):
+    d = Path(runtime) / "org-roam-lynx"
+  else:
+    d = Path(tempfile.gettempdir()) / f"org-roam-lynx-{os.getuid()}"
+  d.mkdir(mode=0o700, exist_ok=True)
+  # Another user could have pre-created this name (or a symlink) in /tmp
+  if d.is_symlink() or d.lstat().st_uid != os.getuid():
+    raise OSError(f"refusing to use {d}: not a private directory of yours")
+  d.chmod(0o700)
+  return d
 
 
 def pluralize(n, word):
@@ -569,6 +611,63 @@ class OrgRoamNavigator:
     else:
       self.status = text
 
+  def show_help(self):
+    """Open README.md in Emacs: rendered to HTML for eww, else as plain text."""
+    readme = find_readme()
+    if readme is None:
+      self.status = "README.md not found (set ROAM_LYNX_README to its path)"
+      return
+
+    if shutil.which("pandoc") is None:
+      # No converter available: show the Markdown source instead
+      elisp = (
+          f'(progn (find-file-read-only "{elisp_escape(str(readme))}")'
+          " (select-frame-set-input-focus (selected-frame)))"
+      )
+      ok, text = self._emacs_eval(elisp)
+      self.status = "pandoc not found; opened README.md as text" if ok else text
+      return
+
+    try:
+      out_dir = help_dir()
+      help_html = out_dir / HELP_HTML_NAME
+      head = out_dir / (HELP_HTML_NAME + ".head")
+      # Relative paths in the README (images) should resolve against the
+      # README's own folder, not the temp directory the HTML lives in.
+      base = html.escape(readme.parent.as_uri() + "/", quote=True)
+      head.write_text(f'<base href="{base}">\n', encoding="utf-8")
+      subprocess.run(
+          [
+              "pandoc",
+              "-f", "gfm",
+              "-t", "html5",
+              "--standalone",
+              "--metadata", "pagetitle=org-roam-lynx help",
+              "--include-in-header", str(head),
+              "-o", str(help_html),
+              str(readme),
+          ],
+          capture_output=True,
+          text=True,
+          timeout=20,
+          check=True,
+      )
+    except subprocess.CalledProcessError as e:
+      err = (e.stderr or "").strip().splitlines()
+      self.status = f"pandoc failed: {err[0] if err else e.returncode}"
+      return
+    except (OSError, subprocess.SubprocessError) as e:
+      self.status = f"Could not build the help page: {e}"
+      return
+
+    url = help_html.as_uri() + (f"#{HELP_ANCHOR}" if HELP_ANCHOR else "")
+    elisp = (
+        f'(progn (eww "{elisp_escape(url)}")'
+        " (select-frame-set-input-focus (selected-frame)))"
+    )
+    ok, text = self._emacs_eval(elisp)
+    self.status = "Help opened in Emacs (q closes it)" if ok else text
+
   def go_back(self):
     """Pop history, re-reading each node and skipping any that were deleted."""
     came_from = self.current_node[0]
@@ -632,7 +731,7 @@ class OrgRoamNavigator:
     if not self.status:
       self.status = "Refreshed"
 
-  def footer_text(self):
+  def footer_text(self, width=80):
     """Key hints that depend on what is highlighted."""
     cur = self.connections[self.selected_idx] if self.connections else None
     on_main = cur is not None and cur["type"] == "MAIN"
@@ -644,8 +743,11 @@ class OrgRoamNavigator:
       parts.append("h:Back")
     if cur is not None:
       parts += ["e:Emacs", "i/I:Link"]
-    parts += ["r:Refresh", "p:Preview", "q:Quit"]
-    return " " + "  ".join(parts)
+    parts += ["r:Refresh", "p:Preview", "?:Help", "q:Quit"]
+    text = " " + "  ".join(parts)
+    if len(text) > width - 1:  # narrow terminal: single-space separators
+      text = " " + " ".join(parts)
+    return text
 
   def run(self, stdscr):
     curses.curs_set(0)
@@ -760,7 +862,7 @@ class OrgRoamNavigator:
         self.draw_preview(stdscr, height - 1 - preview_rows, preview_rows, width)
 
       # --- Render Footer ---
-      footer = self.footer_text()
+      footer = self.footer_text(width)
       if self.status:
         footer = f" {self.status}"
         self.status = ""  # clears on next redraw (i.e. after next keypress)
@@ -800,6 +902,11 @@ class OrgRoamNavigator:
             self.insert_link_in_emacs(node, newline=(key == ord("I")))
           elif self.db_ok:
             self.status = "Node no longer exists in the database"
+
+      # Built-in help. "h" is already Back, so use "?" (as in less) and F1
+      # (as in Midnight Commander).
+      elif key in (ord("?"), curses.KEY_F1):
+        self.show_help()
 
       elif key in (ord("p"), ord("P")):
         self.show_preview = not self.show_preview
