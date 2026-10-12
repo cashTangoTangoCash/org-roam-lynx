@@ -2260,3 +2260,54 @@ Nothing in the shell script needs to change. It hands over the node ID and DB pa
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261011_171242_capture.md")
 
 ---
+
+# PROMPT 22
+let's add a key feature to the python script.  We see a list of org roam nodes (MAIN, BIDIR, OUT, IN).  We have a selection mark (highlight) that we move up and down.  Let's add one new action to apply to the org roam node at the selection mark.  When we press "i" key, emacsclient is used to insert an org mode link to the selected node at point in emacs (in whatever buffer is I guess visible in emacs - not sure of the right language here), followed by a space.  When we press "I" key, we similarly insert an org mode link followed by a newline.  The use case is adding links quickly: we can visit an org roam node in emacs, move point to where we desire to insert a link to a roam node, put selection mark on that roam node in our terminal application, and hit i or I to paste a link into emacs.  This can be a fast way to paste the same link multiple times in emacs, rather than calling org-roam-node-insert over and over (it seems to have some overhead).
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_170227_capture.md")
+
+---
+
+# RESPONSE 22
+I'll edit the script in place. First I'll refactor the `emacsclient` call into a shared helper, so both `e` and the new insert keys use the same error handling.The code compiles. The elisp is the part I can't judge by reading, so I'll try to get a real Emacs into the sandbox and test against it.That run hung and printed nothing, so I'll bring up the daemon on its own and go step by step.The hang was my own `pkill -f` pattern matching the shell running the command, so it killed itself. I'll use `pkill -x emacs` instead.The daemon is up. Now the actual tests.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_170242_capture.md")
+
+---
+
+# PROMPT 23
+Continue
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_170245_capture.md")
+
+---
+
+# RESPONSE 23
+The regression checks passed. The new test failed only because the Emacs daemon didn't survive between tool calls, so I'll start it inside the same command.The daemon isn't coming up this time. I'll check its log and clear any stale socket.The `i` and `I` keys are in the updated `org_roam_lynx_browse_graph.py`. This time I installed a real Emacs 29.3 in the sandbox and tested against it, so the elisp has actually run, though not with org-roam itself (see the end).
+
+**How it behaves**
+- **`i`:** inserts `[[id:UUID][Title]]` followed by a space at point in Emacs.
+- **`I`:** does the same, followed by a newline.
+- **Any row:** both keys work on the highlighted row, including MAIN, and don't move the cursor. In my UI test, `i` on MAIN and then `I` on a BIDIR row put exactly the expected text into the Emacs buffer. Pressing `i`, moving down, and pressing `i` again chained two links in order.
+- **No focus change:** Emacs isn't raised, so you can keep pressing `i` or `I` from the terminal. The footer confirms where the link went, for example `Inserted link to "Alpha" in Emacs buffer target.org`.
+- **Undo:** each insert is one normal edit, so a single undo in Emacs removes it.
+
+**Which Emacs buffer gets it**
+It's the buffer in Emacs's selected window, which is the one you were last working in. If a minibuffer prompt is open, it goes to the window you came from. If that buffer is read-only (a dired or org-roam buffer, say), nothing is inserted and the footer shows `emacsclient failed: Buffer is read-only: ...`. A stopped server or a missing `emacsclient` also shows a plain message.
+
+**Design choices**
+- **Emacs builds the link,** with `org-link-make-string`, the function org-roam's own insert command uses. The title comes from org-roam inside Emacs when it knows the node. Our database copy is only a fallback. This avoids encoding trouble, and non-ASCII titles, quotes, and backslashes all came through intact in the tests.
+- **Brackets in titles:** a title like `Array [0] and [[x]]` gets invisible zero-width characters before the closing brackets. That's standard Org behavior, there so the link doesn't end early.
+- **Refactor:** `e` and the new keys now share one `emacsclient` helper, so error handling is identical.
+- **Footer:** to fit 80 columns with `i/I:Link`, I shortened `l:Jump here` to `l:Jump` and dropped the MAIN-specific `e` wording.
+
+**Things to know**
+- A link inserted this way isn't in org-roam's database until Emacs saves that buffer and syncs, so press `r` here afterward to see it appear as an IN row.
+- I tested against a stand-in for org-roam's `org-roam-node-from-id` and `org-roam-node-title`, not the real package. The change to `e` was also only checked by a UI run and error paths, not against your org-roam. Try both once on your real setup.
+- Not tested: the open-minibuffer case and several GUI frames. In the multi-frame case it should use whichever frame Emacs considers selected.
+
+Diff against your copy before replacing it, since I edited my last version of the file. The README still needs the new keys in the table, a Features bullet, and your use case (quickly pasting the same link many times without `org-roam-node-insert`). Want me to regenerate it?
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_170251_capture.md")
+
+---

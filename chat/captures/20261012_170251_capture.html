@@ -1,0 +1,32 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 23</h1>
+<p><strong><a href="20261012_170245_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<hr />
+<p>The regression checks passed. The new test failed only because the Emacs daemon didn't survive between tool calls, so I'll start it inside the same command.The daemon isn't coming up this time. I'll check its log and clear any stale socket.The <code>i</code> and <code>I</code> keys are in the updated <code>org_roam_lynx_browse_graph.py</code>. This time I installed a real Emacs 29.3 in the sandbox and tested against it, so the elisp has actually run, though not with org-roam itself (see the end).</p>
+<p><strong>How it behaves</strong></p>
+<ul>
+<li><strong><code>i</code>:</strong> inserts <code>[[id:UUID][Title]]</code> followed by a space at point in Emacs.</li>
+<li><strong><code>I</code>:</strong> does the same, followed by a newline.</li>
+<li><strong>Any row:</strong> both keys work on the highlighted row, including MAIN, and don't move the cursor. In my UI test, <code>i</code> on MAIN and then <code>I</code> on a BIDIR row put exactly the expected text into the Emacs buffer. Pressing <code>i</code>, moving down, and pressing <code>i</code> again chained two links in order.</li>
+<li><strong>No focus change:</strong> Emacs isn't raised, so you can keep pressing <code>i</code> or <code>I</code> from the terminal. The footer confirms where the link went, for example <code>Inserted link to &quot;Alpha&quot; in Emacs buffer target.org</code>.</li>
+<li><strong>Undo:</strong> each insert is one normal edit, so a single undo in Emacs removes it.</li>
+</ul>
+<p><strong>Which Emacs buffer gets it</strong>
+It's the buffer in Emacs's selected window, which is the one you were last working in. If a minibuffer prompt is open, it goes to the window you came from. If that buffer is read-only (a dired or org-roam buffer, say), nothing is inserted and the footer shows <code>emacsclient failed: Buffer is read-only: ...</code>. A stopped server or a missing <code>emacsclient</code> also shows a plain message.</p>
+<p><strong>Design choices</strong></p>
+<ul>
+<li><strong>Emacs builds the link,</strong> with <code>org-link-make-string</code>, the function org-roam's own insert command uses. The title comes from org-roam inside Emacs when it knows the node. Our database copy is only a fallback. This avoids encoding trouble, and non-ASCII titles, quotes, and backslashes all came through intact in the tests.</li>
+<li><strong>Brackets in titles:</strong> a title like <code>Array [0] and [[x]]</code> gets invisible zero-width characters before the closing brackets. That's standard Org behavior, there so the link doesn't end early.</li>
+<li><strong>Refactor:</strong> <code>e</code> and the new keys now share one <code>emacsclient</code> helper, so error handling is identical.</li>
+<li><strong>Footer:</strong> to fit 80 columns with <code>i/I:Link</code>, I shortened <code>l:Jump here</code> to <code>l:Jump</code> and dropped the MAIN-specific <code>e</code> wording.</li>
+</ul>
+<p><strong>Things to know</strong></p>
+<ul>
+<li>A link inserted this way isn't in org-roam's database until Emacs saves that buffer and syncs, so press <code>r</code> here afterward to see it appear as an IN row.</li>
+<li>I tested against a stand-in for org-roam's <code>org-roam-node-from-id</code> and <code>org-roam-node-title</code>, not the real package. The change to <code>e</code> was also only checked by a UI run and error paths, not against your org-roam. Try both once on your real setup.</li>
+<li>Not tested: the open-minibuffer case and several GUI frames. In the multi-frame case it should use whichever frame Emacs considers selected.</li>
+</ul>
+<p>Diff against your copy before replacing it, since I edited my last version of the file. The README still needs the new keys in the table, a Features bullet, and your use case (quickly pasting the same link many times without <code>org-roam-node-insert</code>). Want me to regenerate it?</p>
+<hr />
+<p><strong><a href="20261012_170245_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | End →</strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_170251_capture.md&quot;)</p>

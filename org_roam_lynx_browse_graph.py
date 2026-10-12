@@ -56,6 +56,11 @@ FILENAME_STAMP_RE = re.compile(
 )
 
 
+def elisp_escape(s):
+  """Escape a Python string for use inside an elisp "double-quoted" string."""
+  return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def pluralize(n, word):
   return f"{n} {word}" + ("" if n == 1 else "s")
 
@@ -490,26 +495,12 @@ class OrgRoamNavigator:
     ordered = sorted(linked.values(), key=lambda c: TYPE_RANK[c["type"]])
     return [main] + ordered
 
-  def visit_in_emacs(self, node):
-    """Open a node in the running Emacs via emacsclient (non-blocking)."""
-    node_id, _, file_path = node
+  def _emacs_eval(self, elisp):
+    """Evaluate elisp in the running Emacs via emacsclient (non-blocking).
 
-    # org-roam stores ids/files as printed elisp strings, i.e. with quotes
-    node_id = node_id.strip('"')
-    file_path = (file_path or "").strip('"')
-
-    def esc(s):
-      return s.replace("\\", "\\\\").replace('"', '\\"')
-
-    # Visit by ID (lands on the right heading for non-file-level nodes);
-    # fall back to just opening the file if the ID isn't found.
-    elisp = (
-        f'(let ((n (org-roam-node-from-id "{esc(node_id)}")))'
-        f" (if n (org-roam-node-visit n)"
-        f'   (find-file "{esc(file_path)}"))'
-        f" (select-frame-set-input-focus (selected-frame)))"
-    )
-
+    Returns (ok, text): emacsclient's printed result on success, or a short
+    human-readable error message on failure.
+    """
     try:
       result = subprocess.run(
           ["emacsclient", "-n", "--eval", elisp],
@@ -517,15 +508,66 @@ class OrgRoamNavigator:
           text=True,
           timeout=5,
       )
-      if result.returncode == 0:
-        self.status = "Opened in Emacs"
-      else:
-        err = (result.stderr or result.stdout).strip().splitlines()
-        self.status = f"emacsclient failed: {err[0] if err else 'unknown error'}"
     except FileNotFoundError:
-      self.status = "emacsclient not found in PATH"
+      return False, "emacsclient not found in PATH"
     except subprocess.TimeoutExpired:
-      self.status = "emacsclient timed out"
+      return False, "emacsclient timed out"
+
+    if result.returncode == 0:
+      return True, result.stdout.strip()
+    err = (result.stderr or result.stdout).strip().splitlines()
+    msg = err[0].removeprefix("*ERROR*:").strip() if err else "unknown error"
+    return False, f"emacsclient failed: {msg}"
+
+  def visit_in_emacs(self, node):
+    """Open a node in the running Emacs and raise its frame."""
+    node_id, _, file_path = node
+
+    # org-roam stores ids/files as printed elisp strings, i.e. with quotes
+    node_id = node_id.strip('"')
+    file_path = (file_path or "").strip('"')
+
+    # Visit by ID (lands on the right heading for non-file-level nodes);
+    # fall back to just opening the file if the ID isn't found.
+    elisp = (
+        f'(let ((n (org-roam-node-from-id "{elisp_escape(node_id)}")))'
+        f" (if n (org-roam-node-visit n)"
+        f'   (find-file "{elisp_escape(file_path)}"))'
+        f" (select-frame-set-input-focus (selected-frame)))"
+    )
+    ok, text = self._emacs_eval(elisp)
+    self.status = "Opened in Emacs" if ok else text
+
+  def insert_link_in_emacs(self, node, newline=False):
+    """Insert an Org link to node at point in Emacs, then a space or newline.
+
+    The text goes into the buffer shown in Emacs's selected window, i.e. the
+    one you were last working in (or, if a minibuffer prompt is open, the
+    window you came from). Emacs is not raised, so you can insert again
+    straight away. The link is built by Emacs itself, from the node's
+    current title there, so non-ASCII titles and brackets are handled by
+    org-link-make-string. Our own copy of the title is only a fallback for
+    when Emacs does not know the ID.
+    """
+    node_id, title, _ = node
+    node_id = node_id.strip('"')  # org-roam stores IDs wrapped in quotes
+    nid = elisp_escape(node_id)
+    sep = "\\n" if newline else " "  # an elisp string escape, or a space
+
+    elisp = (
+        "(let* ((win (or (minibuffer-selected-window) (selected-window)))"
+        " (n (and (fboundp (quote org-roam-node-from-id))"
+        f'      (org-roam-node-from-id "{nid}")))'
+        f' (title (if n (org-roam-node-title n) "{elisp_escape(title)}")))'
+        " (with-selected-window win"
+        f'   (insert (org-link-make-string "id:{nid}" title) "{sep}")'
+        "   (buffer-name)))"
+    )
+    ok, text = self._emacs_eval(elisp)
+    if ok:
+      self.status = f'Inserted link to "{title}" in Emacs buffer {text.strip(chr(34))}'
+    else:
+      self.status = text
 
   def go_back(self):
     """Pop history, re-reading each node and skipping any that were deleted."""
@@ -597,11 +639,11 @@ class OrgRoamNavigator:
 
     parts = ["j/k:Move"]
     if cur is not None and not on_main:
-      parts.append("l:Jump here")  # on MAIN there is nowhere to jump
+      parts.append("l:Jump")  # on MAIN there is nowhere to jump
     if self.history:
       parts.append("h:Back")
     if cur is not None:
-      parts.append("e:Open MAIN in Emacs" if on_main else "e:Open in Emacs")
+      parts += ["e:Emacs", "i/I:Link"]
     parts += ["r:Refresh", "p:Preview", "q:Quit"]
     return " " + "  ".join(parts)
 
@@ -743,6 +785,19 @@ class OrgRoamNavigator:
           node = self.lookup_node(target["id"])
           if node:
             self.visit_in_emacs(node)
+          elif self.db_ok:
+            self.status = "Node no longer exists in the database"
+
+      # Insert an Org link to the highlighted row at point in Emacs:
+      # i = followed by a space, I = followed by a newline
+      elif key in (ord("i"), ord("I")):
+        if not self.connections:
+          self.status = "Nothing to link to"
+        else:
+          target = self.connections[self.selected_idx]
+          node = self.lookup_node(target["id"])
+          if node:
+            self.insert_link_in_emacs(node, newline=(key == ord("I")))
           elif self.db_ok:
             self.status = "Node no longer exists in the database"
 
