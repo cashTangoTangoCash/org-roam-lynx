@@ -2725,3 +2725,169 @@ The README covers every feature now. A screenshot of the came-from highlight, or
 Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261012_174100_capture.md")
 
 ---
+
+# PROMPT 26
+in the python script, I would like to change the node preview and move
+it more towards a 'flash-card' effect where I see the particular
+content that is most useful to me.  that content is 'plain text' prose
+that precedes the headlines.
+
+let's look at a particular org roam node:
+
+what the top of this org roam node contains:
+
+:PROPERTIES:
+:ROAM_VISIT_ACTION: nil
+:ID:       1e5aa5c2-f053-4439-bf5b-1eaa3fdd0529
+:END:
+#+title: 20261005 a midnight commander lynx like motion style org roam explorer
+#+filetags: :LEFTOFF-202610:
+
+[[id:a9767822-10dc-41e0-80a3-90b7f43b2787][midnight commander]]
+[[id:295399a2-1065-4ad2-806b-3a1090f4b7b0][org roam]]
+[[id:6d791973-9ee3-4feb-af63-77d0afb63988][list of your projects published on github]]
+[[id:e133c330-1fe5-4b3d-8103-6db87ecb76ee][the org-roam buffer]]
+[[id:ff25018a-815d-4b03-95d8-b335d353255c][org-roam-ui]]
+[[id:1f42ff99-06e7-4c6d-9b05-25d5ae136791][2026-09-01 standalone org roam scripts]] - very similar previous project
+
+=/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/=
+https://github.com/cashTangoTangoCash/org-roam-lynx
+
+this is working and is really useful software even at an early stage of
+development
+
+* status / lab notebook
+
+** [2026-10-11 Sun] you are kind of on a high over how useful this software can be
+
+you got annoyed at a linux after dark episode you played this morning
+where they crap all over vibe coders putting their work on github.  if
+they see signs of LLM, they ignore the project
+
+-------
+
+
+
+
+what the roam lynx preview currently shows:
+
+20261005 a midnight commander lynx like motion style org roam explorer
+3068 words · 61 subheadings · 7 out / 4 in · created 10/06/2026 · modified 10/16/2026 (just now)
+    midnight commander
+    org roam
+    list of your projects published on github
+    the org-roam buffer
+    … 6 more lines
+  * status / lab notebook
+  ** [2026-10-11 Sun] you are kind of on a high over how useful this software can be
+    you got annoyed at a linux after dark episode you played this morning
+    where they crap all over vibe coders putting their work on github.  if
+    they see signs of LLM, they ignore the project
+
+-------
+
+
+what I want the preview to show instead (flash card style):
+
+20261005 a midnight commander lynx like motion style org roam explorer
+3068 words · 61 subheadings · 7 out / 4 in · created 10/06/2026 · modified 10/16/2026 (just now)
+
+this is working and is really useful software even at an early stage of
+development
+
+-------
+
+
+so we see that the desired preview is hiding links that take up entire
+lines all to themselves.  it is hiding headlines.  it is keeping just
+the 'plain text prose' that comes before the headlines.  then I can go
+through my org roam nodes that I care about and write a paragraph
+about the topic, so that paragraph appears as the 'flash card' in the
+preview.  In another example, I have an org roam node that is about
+SUM auto insurance coverage.  the main flashcard content I want is to
+quickly glance at how much coverage I currently have.  I don't want to
+see 'noise' about incoming and outgoing links - I already see that in
+the roam lynx view.  I want the flashcard node preview to give me a
+TLDR about the topic.  I think this can become quite powerful as I can
+quickly roam around the node network with the arrow keys and watch the
+flashcards.  another use of flashcard preview is to see the most
+common one-liners for a bash command (copy the parts of m-x tldr
+content that I like the best).
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261016_225651_capture.md")
+
+---
+
+# RESPONSE 26
+Before touching the code, I'll set out the rules I plan to implement, since your example fixes most of them:
+
+- **Card content:** the preview keeps the prose before the node's first heading. Headings, drawers, `#+` keywords and comments stay out.
+- **Reference lines:** a line that's only a link, only a bare URL, or only a `=/path/=` is hidden. This also covers a link followed by a `- note`, since your example hides that line too.
+- **Prose that starts with a link:** `[[Python]] is great` stays visible, because hiding it would lose real content.
+- **Commands:** one-liners like `=tar xf a.tar=` and the contents of `#+begin_src` blocks stay visible, since tldr-style cards need them.
+- **Wrapping:** long lines wrap to the pane width instead of being cut off.
+
+I'll write it and test it against your exact example.
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261016_225656_capture.md")
+
+---
+
+# PROMPT 27
+Continue
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261016_225658_capture.md")
+
+---
+
+# RESPONSE 27
+I've updated `org_roam_lynx_browse_graph.py` so the preview is a flash card. Fed your exact node text, it produces exactly your desired card:
+
+```
+20261005 a midnight commander lynx like motion style org roam explorer
+67 words · 2 subheadings · 0 out / 0 in · created ... · modified ...
+
+this is working and is really useful software even at an early stage of
+development
+```
+
+I ran that in a terminal emulator and saw it rendered. The title and stats line are unchanged, and the word and subheading counts match the old implementation on my test nodes. The `out / in` numbers read `0 / 0` only because my fake database has no links for that node. The `* status / lab notebook` heading and everything under it stay hidden.
+
+**What the card shows**
+- **Included:** the plain prose before the node's first heading, with your line breaks kept and blank-line runs collapsed to one. For a heading-level node, it's the prose under that heading, before its first subheading.
+- **Hidden:**
+  - property drawers
+  - `#+` keywords
+  - Org comments and `#+begin_comment` blocks
+  - `SCHEDULED:` and `DEADLINE:` lines
+  - `-----` rules
+  - lines that are only a link, with an optional `- note` after it (your `... - very similar previous project` line)
+  - bare URL lines
+  - a `=/path/=` line on its own
+- **Kept for tldr-style cards:**
+  - bullets
+  - one-liners like `=tar xf a.tar=`, including ones that start with `/` but contain spaces
+  - the contents of `#+begin_src` and `#+begin_example` blocks, drawn in cyan
+- **Wrapping:** long lines wrap at word boundaries to the pane width instead of being cut, and list items hang under their text.
+- **Empty cards:** a node with no prose shows a dim `(no flash-card text before the first heading)`.
+- **Cursor:** moving the cursor to another row swaps in that node's card.
+
+**Heuristics you should know about**
+- **Prose that starts with a link:** `[[Python]] is great` stays visible. A link only counts as a reference line when nothing follows it, or when a `-`, `--`, or `:` note follows. A sentence that happens to start with a dash-note-style link could be hidden wrongly, which is rare.
+- **Paths:** only a whole-line `=/...=` or `=~/...=` with no spaces counts as a path. Other whole-line commands are kept.
+- **Code blocks:** a `* ` line inside a code block no longer ends the card early.
+
+**Limits**
+- **Pane height:** the list and the preview each get about half the screen, so on an 80x24 terminal you see only about 4 card lines under the header. A taller terminal shows more, and an ellipsis marks cut-off text. A setting that gives the preview more than half the height is easy to add. Want it?
+- **No toggle back to the old outline view.** I removed that code, along with `MAX_BODY_LINES` and `HEADING_PAIRS`, which are replaced by `MAX_CARD_LINES` and `CARD_CODE_PAIR`. I can add a key that switches between the card and the outline if you miss it for nodes without prose.
+
+The README is now out of date in three places:
+- The Features bullet and "Reading the screen" still describe the outline preview, with colored headings and collapsed sections.
+- The tweaking table lists `MAX_BODY_LINES`.
+- The GIF and screenshots show the old preview.
+
+A section on how to write a card (a paragraph above the first heading, with link lists and URLs hidden) would also help. Want me to update the README?
+
+Edit: (find-file "/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261016_225708_capture.md")
+
+---

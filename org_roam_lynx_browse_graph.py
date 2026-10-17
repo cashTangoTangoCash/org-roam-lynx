@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from datetime import datetime
 from pathlib import Path
@@ -34,9 +35,9 @@ def resolve_db_path(cli_db=None):
 START_NODE_TITLE = "a bike accident and injury"
 PREVIEW_MIN_HEIGHT = 16  # hide the pane on very short terminals
 MAX_READ_CHARS = 200_000  # cap on how much of a file we read
-MAX_BODY_LINES = 4  # body lines shown per heading (poor man's folding)
+MAX_CARD_LINES = 100  # cap on flash-card lines kept per node (before wrapping)
 STUB_WORDS = 40  # fewer words than this gets flagged as a stub
-HEADING_PAIRS = (4, 5, 6, 3)  # curses color pairs for heading levels 1-4+
+CARD_CODE_PAIR = 6  # color pair for code/example lines in the flash card
 
 # Row labels in the list -> curses color pair (see init_pair calls in run)
 TYPE_PAIRS = {"MAIN": 4, "BIDIR": 5, "OUT": 3, "IN": 2}
@@ -50,6 +51,23 @@ HEADING_RE = re.compile(r"^(\*+)\s+(.*)")
 DRAWER_START_RE = re.compile(r"^\s*:[A-Za-z_-]+:\s*$")
 DRAWER_END_RE = re.compile(r"^\s*:END:\s*$", re.IGNORECASE)
 LINK_RE = re.compile(r"\[\[[^\]]*\]\[([^\]]*)\]\]|\[\[([^\]]*)\]\]")
+
+# Flash-card preview. These lines are references rather than prose, so they
+# are hidden: a link on its own line (optionally followed by "- a note"), a bare
+# URL, or a verbatim /path/ on its own line. A sentence that merely starts with
+# a link ("[[Python]] is great") is prose and is kept.
+_LINK = r"\[\[[^\]\n]*\](?:\[[^\]\n]*\])?\]"
+_NOTE = r"(?:(?:--?|[–—:])\s.*)?"  # optional "- annotation" after a reference
+REF_LINK_LINE_RE = re.compile(
+    rf"^\s*(?:[-+]\s+)?{_LINK}(?:[\s,;|·]*{_LINK})*[\s,;|·]*{_NOTE}$"
+)
+REF_URL_LINE_RE = re.compile(
+    rf"^\s*(?:[-+]\s+)?<?(?:https?|ftp|file|mailto):\S+>?\s*{_NOTE}$"
+)
+REF_PATH_LINE_RE = re.compile(r"^\s*(?:[-+]\s+)?[=~](?:/|~/|\./)[^\s=~]*[=~]\s*$")
+PLANNING_RE = re.compile(r"^\s*(?:SCHEDULED|DEADLINE|CLOSED):")
+RULE_RE = re.compile(r"^\s*-{5,}\s*$")
+LIST_MARKER_RE = re.compile(r"^(?:[-+*]|\d+[.)])\s+")
 
 # Built-in help = README.md rendered to HTML (pandoc) and shown in Emacs (eww)
 HELP_HTML_NAME = "org-roam-lynx-help.html"  # unique, so it can't clash with
@@ -101,6 +119,23 @@ def help_dir():
     raise OSError(f"refusing to use {d}: not a private directory of yours")
   d.chmod(0o700)
   return d
+
+
+def wrap_card_line(text, width):
+  """Word-wrap one flash-card line, hanging list items under their text."""
+  text = text.expandtabs(2).rstrip()
+  if not text.strip():
+    return [""]
+  indent = len(text) - len(text.lstrip())
+  marker = LIST_MARKER_RE.match(text.lstrip())
+  hang = " " * (indent + (len(marker.group(0)) if marker else 0))
+  return textwrap.wrap(
+      text,
+      width=max(10, width),
+      subsequent_indent=hang,
+      break_long_words=True,
+      break_on_hyphens=False,  # keep flags like -xzf in one piece
+  ) or [""]
 
 
 def pluralize(n, word):
@@ -286,9 +321,13 @@ class OrgRoamNavigator:
     return rows[0][0] if rows else "?"
 
   def _summarize_org(self, text, level):
-    """Return (word_count, subheading_count, styled_lines) for a node's text.
+    """Return (word_count, subheading_count, card_lines) for a node's text.
 
-    styled_lines is a list of (text, kind, heading_level) tuples.
+    The counts describe the whole node. card_lines is the flash card: the
+    plain prose before the node's first (sub)heading, as (text, kind) pairs
+    where kind is "body" or "code". Property drawers, #+ keywords, comments,
+    planning lines, and lines that are only a link, URL or file path are left
+    out, and runs of blank lines collapse to one.
     """
     lines = text.splitlines()
     if level:
@@ -299,55 +338,78 @@ class OrgRoamNavigator:
           lines = lines[:i]
           break
 
-    out = []
+    card = []
     words = 0
     subheads = 0
     in_drawer = False
-    shown = 0  # body lines shown under the current heading
-    hidden = 0  # body lines collapsed under the current heading
+    in_card = True  # still before the node's first subheading
+    block = None  # name of the #+begin_ block we are inside, if any
 
-    def flush_hidden():
-      nonlocal hidden
-      if hidden:
-        plural = "s" if hidden != 1 else ""
-        out.append((f"  … {hidden} more line{plural}", "dim", 0))
-        hidden = 0
+    def add_card(line_text, kind):
+      if not in_card or len(card) >= MAX_CARD_LINES:
+        return
+      if not line_text.strip():
+        if card and card[-1][0]:  # at most one blank line, never a leading one
+          card.append(("", kind))
+        return
+      card.append((line_text.rstrip(), kind))
 
     for i, line in enumerate(lines):
       if in_drawer:
         if DRAWER_END_RE.match(line):
           in_drawer = False
         continue
-      if DRAWER_START_RE.match(line):
+      if block is None and DRAWER_START_RE.match(line):
         in_drawer = True
         continue
-      if line.lstrip().startswith("#+"):
+
+      stripped = line.strip()
+      low = stripped.lower()
+      if low.startswith("#+begin_"):
+        parts = low[len("#+begin_") :].split()
+        block = parts[0] if parts else ""  # "src", "example", "comment", ...
+        continue
+      if low.startswith("#+end_"):
+        block = None
+        continue
+      if low.startswith("#+"):  # keywords: #+title:, #+filetags:, ...
         continue
 
-      m = HEADING_RE.match(line)
-      if m:
-        flush_hidden()
-        shown = 0
-        if not (i == 0 and level):  # don't count the node's own heading
-          subheads += 1
-        words += len(m.group(2).split())
-        out.append(
-            (self._strip_links(line.rstrip()), "heading", len(m.group(1)))
-        )
-        continue
+      if block is None:
+        m = HEADING_RE.match(line)
+        if m:
+          words += len(m.group(2).split())
+          if not (i == 0 and level):  # the node's own heading isn't a subheading
+            subheads += 1
+            in_card = False
+          continue
 
       body = self._strip_links(line).strip()
       if not body:
+        add_card("", "body")
         continue
       words += len(body.split())
-      if shown < MAX_BODY_LINES:
-        out.append(("  " + body, "body", 0))
-        shown += 1
-      else:
-        hidden += 1
 
-    flush_hidden()
-    return words, subheads, out
+      if block == "comment":
+        continue
+      if block is not None:  # source/example block: keep, drawn as code
+        add_card(line.rstrip(), "code")
+        continue
+      if (
+          stripped == "#"
+          or stripped.startswith("# ")  # Org comment line
+          or PLANNING_RE.match(line)
+          or RULE_RE.match(line)
+          or REF_LINK_LINE_RE.match(line)
+          or REF_URL_LINE_RE.match(line)
+          or REF_PATH_LINE_RE.match(line)
+      ):
+        continue
+      add_card(self._strip_links(line).rstrip(), "body")
+
+    while card and not card[-1][0]:
+      card.pop()
+    return words, subheads, card
 
   @staticmethod
   def _preview_note(conn, message, lines=()):
@@ -369,7 +431,7 @@ class OrgRoamNavigator:
       mtime = os.stat(file_path).st_mtime_ns
     except OSError:
       return self._preview_note(
-          conn, "File not found", [(file_path, "dim", 0)]
+          conn, "File not found", [(file_path, "dim")]
       )
 
     key = (node_id, mtime)
@@ -461,16 +523,26 @@ class OrgRoamNavigator:
 
     body_top = top + 2 + len(info_lines)
     body_rows = rows - 2 - len(info_lines)
+    if body_rows > 3:  # a blank row between the header and the card
+      body_top += 1
+      body_rows -= 1
     if body_rows <= 0:
       return
-    lines = preview["lines"] or [("(no body text)", "dim", 0)]
-    truncated = len(lines) > body_rows
-    for i, (text, kind, lvl) in enumerate(lines[:body_rows]):
+
+    card = preview["lines"] or [
+        ("(no flash-card text before the first heading)", "dim")
+    ]
+    wrapped = []
+    for text, kind in card:
+      for piece in wrap_card_line(text, width - 4):
+        wrapped.append((piece, kind))
+
+    truncated = len(wrapped) > body_rows
+    for i, (text, kind) in enumerate(wrapped[:body_rows]):
       if truncated and i == body_rows - 1:
-        text, kind, lvl = "  …", "dim", 0
-      if kind == "heading":
-        pair = HEADING_PAIRS[min(lvl, len(HEADING_PAIRS)) - 1]
-        attr = curses.color_pair(pair) | curses.A_BOLD
+        text, kind = "…", "dim"
+      if kind == "code":
+        attr = curses.color_pair(CARD_CODE_PAIR)
       elif kind == "dim":
         attr = curses.A_DIM
       else:
@@ -757,9 +829,9 @@ class OrgRoamNavigator:
     curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Selected
     curses.init_pair(2, curses.COLOR_GREEN, -1)  # IN (backlinks)
     curses.init_pair(3, curses.COLOR_YELLOW, -1)  # OUT (outlinks)
-    curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header / MAIN / heading 1
-    curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # BIDIR / heading 2
-    curses.init_pair(6, curses.COLOR_CYAN, -1)  # Heading level 3
+    curses.init_pair(4, curses.COLOR_BLUE, -1)  # Header / MAIN
+    curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # BIDIR
+    curses.init_pair(6, curses.COLOR_CYAN, -1)  # Code lines in the flash card
     # Reminder row after Back; must differ from the cursor (pair 1)
     curses.init_pair(CAME_FROM_PAIR, curses.COLOR_BLACK, curses.COLOR_YELLOW)
 

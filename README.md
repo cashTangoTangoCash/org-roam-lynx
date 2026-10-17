@@ -4,6 +4,8 @@
 
 Move through your notes the way you move through directories in Midnight Commander or follow links in Lynx: pick a node, see everything it links to and everything that links back to it, press a key to jump, press another to go back. No browser, no server, no waiting.
 
+Note: the GIF and screenshots are not yet updated to show the latest version of the code.
+
 In this GIF, we are roaming slowly so you can see what is going on.  Node preview is being turned on and off.
 <p align="center">
   <img src="docs/GIFs/simple-demo.gif" alt="Lynx-style Org-Roam Terminal Explorer Demo" width="700">
@@ -39,7 +41,7 @@ It's not a replacement for org-roam-ui's big-picture view. It's the fast lane fo
 
 - Browse a node's **links in one list**: the node itself (`MAIN`), then everything it links to (`OUT`), everything that links to it (`IN`), and nodes that link both ways (`BIDIR`, shown once)
 - **Jump** into a linked node, and **go back** through your history. After going back, the node you came from is marked so you can find your place again
-- **Preview pane** for the highlighted row, with Org-aware styling: property drawers and `#+` keywords hidden, headings colored by level, long sections collapsed
+- **Flash-card preview** for the highlighted row: just the plain prose written before the node's first heading, so a short paragraph at the top of a note becomes its at-a-glance summary. Drawers, `#+` keywords, headings, and lines that are only links, URLs, or file paths are hidden; commands and code blocks are kept. See [Writing flash cards](#writing-flash-cards)
 - **Preview header** per node: its title, word count, subheading count, how many nodes it links to and from, and when it was created and last modified. Nodes with very little content are flagged as **stubs**, so you can tell at a glance whether a node is worth opening
 - **Open in Emacs** via `emacsclient` without leaving the browser. `e` works on whichever row is highlighted, including MAIN
 - **Insert links into Emacs**: `i` inserts an Org link to the highlighted node at point in Emacs, followed by a space; `I` follows it with a newline. A quick way to paste the same link in several places without calling `org-roam-node-insert` each time
@@ -122,6 +124,8 @@ Move the cursor down to any row to preview that node and act on it. Jumping to a
 
 **Where you came from.** When you go back, the cursor lands on MAIN as usual, and the node you just came back from is marked with a yellow row and a `←` in the margin. It's only a reminder: it doesn't move the cursor or change what the preview shows. The header line names it too, with its position in the list, in case a long list has scrolled it out of view. The mark disappears the next time you jump forward.
 
+**The flash card.** The preview pane shows the highlighted node as a flash card: its title and a summary line, then the plain prose written before its first heading. Press `p` to hide or show it. [Writing flash cards](#writing-flash-cards) explains what is shown and what is hidden.
+
 **The preview header.** The first lines of the preview pane show the node's title, then a summary such as:
 
 ```
@@ -153,6 +157,56 @@ Where the dates come from (Org-roam's database doesn't record either one):
 | `q` | Quit |
 
 The hints along the bottom of the screen change with the highlighted row: for example, `l:Jump` isn't offered on MAIN, and `h:Back` only appears when there is history to go back through.
+
+## Writing flash cards
+
+The preview is meant to be a TLDR you write once and then glance at as you roam: the answer to "what do I need to remember about this node?" The links and backlink counts are already visible in the list, so the card leaves them out.
+
+To give a node a card, put a short paragraph (or a few bullets, or a handful of one-liners) near the top, above the first `*` heading. For example:
+
+```org
+:PROPERTIES:
+:ID:       1e5aa5c2-f053-4439-bf5b-1eaa3fdd0529
+:END:
+#+title: auto insurance coverage
+#+filetags: :insurance:
+
+[[id:a9767822-10dc-41e0-80a3-90b7f43b2787][insurance companies]]
+[[id:295399a2-1065-4ad2-806b-3a1090f4b7b0][my policies]] - renewal dates
+
+=/home/me/Documents/insurance/=
+https://example.com/my-policy
+
+Liability 100/300/100, comprehensive and collision with a $500
+deductible. Renews every March.
+
+* status / notes
+
+** [2026-10-11 Sun] called the agent
+```
+
+The card for that node is just the paragraph:
+
+```
+Liability 100/300/100, comprehensive and collision with a $500
+deductible. Renews every March.
+```
+
+**What is shown:** the plain text before the node's first heading, with your line breaks kept (long lines wrap to the pane). Bullet lists, commands such as `=tar xf archive.tar=`, and the contents of `#+begin_src` and `#+begin_example` blocks are all kept, which makes the card handy for a node of favorite one-liners for a command. Code and example lines are drawn in a different color.
+
+**What is hidden:**
+
+- property drawers, `#+` keywords such as `#+title:`, Org comments and `#+begin_comment` blocks, and `SCHEDULED:` / `DEADLINE:` lines
+- any line that is only a link, with an optional note after it (`[[id:...][name]] - a note`), and any line that is only a bare URL or a `=/path/to/folder/=`
+- everything from the first heading on
+
+**Good to know:**
+
+- A sentence that merely *starts* with a link (`[[id:...][Python]] is great`) is prose and is kept. A link followed by a `-` or `:` note is treated as a link-list entry and hidden.
+- For a heading-level node, the card is the text under that heading, before its first subheading.
+- A node with nothing before its first heading shows a dim `(no flash-card text before the first heading)`. The summary line is still there, and still flags stubs.
+- The word and subheading counts in the summary line cover the whole node, not just the card.
+- If a card is taller than the pane, it ends with `…`. A taller terminal shows more.
 
 ## Inserting links into Emacs
 
@@ -213,7 +267,8 @@ A few constants near the top of `org_roam_lynx_browse_graph.py` are meant to be 
 | `START_NODE_TITLE` | Starting node when none is given |
 | `DATE_FORMAT` | How dates look in the preview (default `%m/%d/%Y`; use `%Y-%m-%d` for 2026-10-11) |
 | `STUB_WORDS` | Word count below which a node is flagged as a stub |
-| `MAX_BODY_LINES` | Body lines shown under each heading in the preview |
+| `MAX_CARD_LINES` | Most lines kept for a node's flash card, before wrapping |
+| `CARD_CODE_PAIR` | Color pair for code and example lines in the flash card |
 | `TYPE_RANK` | Order of the list rows below MAIN (default: BIDIR, OUT, IN) |
 | `CAME_FROM_PAIR`, `CAME_FROM_GLYPH` | Color pair and margin arrow for the came-from reminder |
 | `HELP_ANCHOR` | README heading the help opens at (default `reading-the-screen`). If you rename that heading, change this to match: lowercase, with hyphens for spaces |
@@ -227,7 +282,8 @@ Because it reads the database rather than your files, it's only as current as Or
 ## Known limitations
 
 - Only `id:` links are followed, which are the links Org-roam itself tracks. Plain URLs and file links aren't shown as connections.
-- The preview is a lightweight approximation of Org's appearance, not a full renderer.
+- The flash card is built with simple line-by-line rules, not a full Org parser, so unusual markup can slip through or occasionally be hidden by mistake (see [Writing flash cards](#writing-flash-cards)).
+- Notes written only under headings don't appear in the preview, since the card is the text before the first heading.
 - Heading-level nodes assume UTF-8 files with LF line endings when locating their text.
 - Dates in the preview belong to the file, so every heading-level node in a file shows the same dates. The created date can be wrong for files whose names have no timestamp and whose creation time was reset by copying or syncing.
 - `i`/`I` insert into whatever buffer Emacs's selected window is showing, so glance at the footer message the first time to confirm the link landed where you meant.

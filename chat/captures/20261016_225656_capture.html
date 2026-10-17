@@ -1,0 +1,16 @@
+<style>table{border-collapse:collapse;width:100%;margin:1em 0;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background-color:#f8f8f8;}</style>
+<h1>RESPONSE 26</h1>
+<p><strong><a href="20261016_225651_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261016_225658_capture.html">Next →</a></strong></p>
+<hr />
+<p>Before touching the code, I'll set out the rules I plan to implement, since your example fixes most of them:</p>
+<ul>
+<li><strong>Card content:</strong> the preview keeps the prose before the node's first heading. Headings, drawers, <code>#+</code> keywords and comments stay out.</li>
+<li><strong>Reference lines:</strong> a line that's only a link, only a bare URL, or only a <code>=/path/=</code> is hidden. This also covers a link followed by a <code>- note</code>, since your example hides that line too.</li>
+<li><strong>Prose that starts with a link:</strong> <code>[[Python]] is great</code> stays visible, because hiding it would lose real content.</li>
+<li><strong>Commands:</strong> one-liners like <code>=tar xf a.tar=</code> and the contents of <code>#+begin_src</code> blocks stay visible, since tldr-style cards need them.</li>
+<li><strong>Wrapping:</strong> long lines wrap to the pane width instead of being cut off.</li>
+</ul>
+<p>I'll write it and test it against your exact example.</p>
+<hr />
+<p><strong><a href="20261016_225651_capture.html">← Previous</a> | <a href="../full_transcript.html">Full Index</a> | <a href="20261016_225658_capture.html">Next →</a></strong></p>
+<p>Edit: (find-file &quot;/home/dad84/Documents/2026/20261005-midnight-commander-style-org-roam-node-explorer/chat/captures/20261016_225656_capture.md&quot;)</p>
